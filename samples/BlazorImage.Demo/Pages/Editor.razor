@@ -1,0 +1,161 @@
+@page "/editor"
+
+<PageTitle>Full editor — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>The editor component</h1>
+    <p class="lede">
+        Everything in one component: crop, rotate, adjustments, filters, drawing, annotations, layers, history and
+        export. Drop an image below, or open one from the drop zone inside the editor.
+    </p>
+</div>
+
+<div class="btn-row" style="margin-bottom:14px">
+    <label class="field-label" style="align-self:center; margin:0">Theme</label>
+    @foreach (var theme in new[] { "auto", "light", "dark" })
+    {
+        <button type="button" class="chip" aria-pressed="@(_theme == theme)" @onclick="() => _theme = theme">@theme</button>
+    }
+    <label class="field-label" style="align-self:center; margin-inline-start:16px; margin-bottom:0">Direction</label>
+    @foreach (var dir in new[] { "ltr", "rtl" })
+    {
+        <button type="button" class="chip" aria-pressed="@(_direction == dir)" @onclick="() => _direction = dir">@dir</button>
+    }
+    <label class="field-label" style="align-self:center; margin-inline-start:16px; margin-bottom:0">Language</label>
+    @foreach (var lang in Languages)
+    {
+        <button type="button" class="chip" aria-pressed="@(_language == lang.Key)" @onclick="() => SetLanguage(lang.Key)">@lang.Key</button>
+    }
+</div>
+
+<div class="editor-frame">
+    <ImageEditor @ref="_editor"
+                 Class="@ThemeClass"
+                 Direction="@_direction"
+                 Strings="_strings"
+                 ExportOptions="ExportOptions"
+                 OnDocumentChanged="OnDocumentChanged"
+                 OnImageLoaded="_ => StateHasChanged()" />
+</div>
+
+@if (_document is not null)
+{
+    <div class="card" style="margin-top:16px">
+        <p class="card-title">The document behind the editor</p>
+        <p class="small muted">
+            This is the whole edit: a list of pixel operations and a list of annotation objects. It is a value, so it
+            can be stored, sent to a server, replayed on the original file, or applied to a different image entirely.
+        </p>
+        <pre class="code">@DocumentText</pre>
+    </div>
+}
+
+<div class="card">
+    <p class="card-title">Using it</p>
+    <pre class="code">@Snippet</pre>
+</div>
+
+@code {
+    private ImageEditor? _editor;
+    private ImageDocument? _document;
+    private string _theme = "auto";
+    private string _direction = "ltr";
+    private string _language = "English";
+    private ImageEditorStrings _strings = ImageEditorStrings.Default;
+
+    private static readonly ImageExportOptions ExportOptions = new()
+    {
+        Format = ImageFormat.Png,
+        Metadata = MetadataPolicy.StripSensitive,
+    };
+
+    private string ThemeClass => _theme switch
+    {
+        "light" => "bi-theme-light",
+        "dark" => "bi-theme-dark",
+        _ => string.Empty,
+    };
+
+    /// <summary>
+    /// Two example translations. Every label is a property on a record, so a translation is an object, not a resource
+    /// file, and a host can override just the few words it cares about.
+    /// </summary>
+    private static readonly Dictionary<string, ImageEditorStrings> Languages = new()
+    {
+        ["English"] = ImageEditorStrings.Default,
+        ["Deutsch"] = ImageEditorStrings.Default with
+        {
+            Select = "Auswählen", Crop = "Zuschneiden", Draw = "Zeichnen", Arrow = "Pfeil", Line = "Linie",
+            Rectangle = "Rechteck", Ellipse = "Ellipse", Text = "Text", Highlight = "Markieren", Redact = "Schwärzen",
+            Adjust = "Anpassen", Filters = "Filter", Layers = "Ebenen", History = "Verlauf", Export = "Exportieren",
+            Undo = "Rückgängig", Redo = "Wiederholen", Reset = "Zurücksetzen", Download = "Herunterladen",
+            Brightness = "Helligkeit", Contrast = "Kontrast", Saturation = "Sättigung", Tools = "Werkzeuge",
+            DropImageHere = "Bild hier ablegen oder klicken zum Auswählen",
+        },
+        ["فارسی"] = ImageEditorStrings.Default with
+        {
+            Select = "انتخاب", Crop = "برش", Draw = "رسم", Arrow = "پیکان", Line = "خط",
+            Rectangle = "مستطیل", Ellipse = "بیضی", Text = "متن", Highlight = "هایلایت", Redact = "پنهان‌سازی",
+            Adjust = "تنظیم", Filters = "فیلترها", Layers = "لایه‌ها", History = "تاریخچه", Export = "خروجی",
+            Undo = "واگرد", Redo = "ازنو", Reset = "بازنشانی", Download = "دانلود",
+            Brightness = "روشنایی", Contrast = "کنتراست", Saturation = "اشباع", Tools = "ابزارها",
+            DropImageHere = "تصویر را اینجا رها کنید یا برای انتخاب کلیک کنید",
+        },
+    };
+
+    private const string Snippet = """
+        @* The simple path stays simple. *@
+        <ImageEditor @ref="editor" />
+        <button @onclick="() => editor.DownloadAsync(&quot;edited&quot;)">Save</button>
+
+        @* And the advanced path is the same component. *@
+        <ImageEditor Strings="german" Direction="rtl" Class="bi-theme-dark"
+                     MaxProxyDimension="3000"
+                     OnDocumentChanged="doc => Persist(doc)">
+            <Toolbar Context="editor">
+                <button @onclick="() => editor.SetTool(EditorToolKind.Crop)">Crop</button>
+                <button disabled="@(!editor.CanUndo)" @onclick="editor.Undo">Undo</button>
+            </Toolbar>
+        </ImageEditor>
+        """;
+
+    private string DocumentText
+    {
+        get
+        {
+            if (_document is null) return string.Empty;
+            var lines = new List<string>
+            {
+                $"Source      {_document.SourceSize.Width} × {_document.SourceSize.Height}",
+                $"Output      {_document.OutputSize.Width} × {_document.OutputSize.Height}",
+                "",
+                $"Pipeline ({_document.Pipeline.Count})",
+            };
+            if (_document.Pipeline.Count == 0) lines.Add("  (none)");
+            foreach (var operation in _document.Pipeline) lines.Add($"  {operation}");
+            lines.Add("");
+            lines.Add($"Annotations ({_document.Annotations.Count})");
+            if (_document.Annotations.Count == 0) lines.Add("  (none)");
+            foreach (var annotation in _document.Annotations)
+            {
+                var b = annotation.GetBounds();
+                lines.Add($"  {annotation.Kind,-10} at ({b.X:0},{b.Y:0}) {b.Width:0}×{b.Height:0}");
+            }
+            return string.Join('\n', lines);
+        }
+    }
+
+    private void SetLanguage(string language)
+    {
+        _language = language;
+        _strings = Languages[language];
+        // Persian reads right to left, so switching the language switches the layout too.
+        if (language == "فارسی") _direction = "rtl";
+    }
+
+    private void OnDocumentChanged(ImageDocument document)
+    {
+        _document = document;
+        StateHasChanged();
+    }
+}

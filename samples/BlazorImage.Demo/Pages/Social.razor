@@ -1,0 +1,357 @@
+@page "/social"
+@implements IDisposable
+@inject ImageLoader Loader
+@inject ImageExporter Exporter
+@inject BlazorImage.Text.BrowserTextRasterizer TextRasterizer
+
+<PageTitle>Social image editor — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>Social image editor</h1>
+    <p class="lede">
+        Compose to a platform's exact canvas, apply a look, and burn in a caption. The text is rendered by the browser's
+        own text engine, so system fonts, emoji and right-to-left scripts all work without shipping a font file.
+    </p>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-error" role="alert">@_error</div>
+}
+
+<div class="split">
+    <div class="card">
+        @if (_source is null)
+        {
+            <ImageDropZone Label="Drop a photo here" OnFilesSelected="OnFilesSelected" />
+        }
+        else
+        {
+            <ImagePreview Image="_result" Version="_version" Alt="Composed social image" Style="max-height:60vh; margin-inline:auto" />
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px">
+                <span class="small muted">
+                    @if (_result is not null)
+                    {
+                        <text>@_result.Width × @_result.Height</text>
+                    }
+                    @if (_encoded is not null)
+                    {
+                        <text> · @Format(_encoded.Length)</text>
+                    }
+                </span>
+                <div class="btn-row">
+                    <button class="btn btn-primary" disabled="@(_encoded is null || _busy)" @onclick="Download">Download</button>
+                    <button class="btn" @onclick="Clear">Start over</button>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="card">
+        <p class="card-title">Canvas</p>
+        <div class="field">
+            <label class="field-label" for="preset">Preset</label>
+            <select id="preset" class="bi-select" @onchange="OnPresetChanged">
+                @foreach (var preset in Presets)
+                {
+                    <option value="@preset.Name" selected="@(_preset.Name == preset.Name)">@preset.Name (@preset.Width×@preset.Height)</option>
+                }
+            </select>
+        </div>
+
+        <p class="card-title" style="margin-top:14px">Look</p>
+        <div class="field">
+            <span class="field-label">Filter</span>
+            <div class="chip-row">
+                @foreach (var look in Looks)
+                {
+                    <button type="button" class="chip" aria-pressed="@(_look == look)" @onclick="() => SetLook(look)">@look</button>
+                }
+            </div>
+        </div>
+
+        <div class="field">
+            <label class="field-label" for="warmth">Warmth <span class="field-value">@_warmth.ToString("0.00")</span></label>
+            <input id="warmth" type="range" min="-0.6" max="0.6" step="0.02" value="@_warmth" @oninput="e => SetDouble(v => _warmth = (float)v, e)" />
+        </div>
+
+        <div class="field">
+            <label class="field-label" for="vig">Vignette <span class="field-value">@_vignette.ToString("0.00")</span></label>
+            <input id="vig" type="range" min="0" max="1" step="0.02" value="@_vignette" @oninput="e => SetDouble(v => _vignette = (float)v, e)" />
+        </div>
+
+        <p class="card-title" style="margin-top:14px">Caption</p>
+        <div class="field">
+            <input type="text" placeholder="Add a caption" value="@_caption" @oninput="OnCaptionChanged" aria-label="Caption text" />
+        </div>
+        <div class="field">
+            <label class="field-label" for="capsize">Size <span class="field-value">@_captionSize%</span></label>
+            <input id="capsize" type="range" min="3" max="14" step="1" value="@_captionSize" @oninput="e => SetDouble(v => _captionSize = (int)v, e)" />
+        </div>
+        <div class="field">
+            <label class="field-label" for="capcolor">Colour</label>
+            <input id="capcolor" type="color" class="bi-color" value="@_captionColor.ToHex(false)" @onchange="OnCaptionColorChanged" />
+        </div>
+        <div class="field field-inline">
+            <input id="scrim" type="checkbox" checked="@_scrim" @onchange="OnScrimChanged" />
+            <label class="field-label" for="scrim" style="margin:0">Darken behind the caption</label>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <p class="card-title">Composing with the canvas API</p>
+    <pre class="code">@Snippet</pre>
+</div>
+
+@code {
+    private sealed record Preset(string Name, int Width, int Height);
+
+    private static readonly Preset[] Presets =
+    [
+        new("Instagram square", 1080, 1080),
+        new("Instagram portrait", 1080, 1350),
+        new("Story", 1080, 1920),
+        new("Open Graph", 1200, 630),
+        new("X post", 1600, 900),
+        new("LinkedIn", 1200, 627),
+    ];
+
+    private static readonly string[] Looks = ["None", "Mono", "Sepia", "Punch", "Fade"];
+
+    private ImageBuffer? _source;
+    private ImageBuffer? _result;
+    private EncodedImage? _encoded;
+    private Preset _preset = Presets[3];
+    private string _look = "None";
+    private float _warmth;
+    private float _vignette = 0.25f;
+    private string _caption = string.Empty;
+    private int _captionSize = 6;
+    private Rgba32 _captionColor = Rgba32.White;
+    private bool _scrim = true;
+    private long _version;
+    private bool _busy;
+    private string? _error;
+    private readonly Debouncer _debounce = new(220);
+
+    private const string Snippet = """
+        // Cover fills the canvas exactly, cropping the overflow rather than distorting.
+        var pipeline = ImagePipeline.Create()
+            .AutoOrient()
+            .Cover(preset.Width, preset.Height)
+            .Saturation(0.12f)
+            .Vignette(0.25f);
+
+        using var composed = pipeline.Execute(source);
+
+        // Draw the caption straight onto the pixels with the browser text engine.
+        using var canvas = ImageCanvas.FromBuffer(composed);
+        canvas.FillRectangle(scrimRect, new Rgba32(0, 0, 0, 130));
+        await textRasterizer.DrawTextAsync(canvas, caption, position, new TextStyle
+        {
+            FontSize  = composed.Height * 0.06f,
+            Bold      = true,
+            FillColor = Rgba32.White,
+            Alignment = TextAlignment.Center,
+            MaxWidth  = composed.Width * 0.86f,
+        });
+        """;
+
+    private async Task OnFilesSelected(IReadOnlyList<IBrowserFile> files)
+    {
+        if (files.Count == 0) return;
+        _error = null;
+        try
+        {
+            _source?.Dispose();
+            _source = await Loader.LoadAsync(files[0]);
+            await Compose();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+    }
+
+    private void OnPresetChanged(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString();
+        _preset = Presets.FirstOrDefault(p => p.Name == name) ?? _preset;
+        Schedule();
+    }
+
+    private void SetLook(string look)
+    {
+        _look = look;
+        Schedule();
+    }
+
+    private void SetDouble(Action<double> assign, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            assign(value);
+            Schedule();
+        }
+    }
+
+    private void OnCaptionChanged(ChangeEventArgs e)
+    {
+        _caption = e.Value?.ToString() ?? string.Empty;
+        Schedule();
+    }
+
+    private void OnCaptionColorChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string hex && Rgba32.TryParseHex(hex, out var color))
+        {
+            _captionColor = color;
+            Schedule();
+        }
+    }
+
+    private void OnScrimChanged(ChangeEventArgs e)
+    {
+        _scrim = (bool)(e.Value ?? false);
+        Schedule();
+    }
+
+    private void Schedule() => _debounce.Schedule(async _ => await Compose());
+
+    private async Task Compose()
+    {
+        if (_source is null) return;
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var pipeline = ImagePipeline.Create()
+                .AutoOrient()
+                .Cover(_preset.Width, _preset.Height);
+
+            pipeline = _look switch
+            {
+                "Mono" => pipeline.Grayscale().Contrast(0.12f),
+                "Sepia" => pipeline.Sepia(0.85f).Contrast(0.06f),
+                "Punch" => pipeline.Saturation(0.3f).Contrast(0.18f).ShadowsHighlights(0.1f, -0.12f),
+                "Fade" => pipeline.Saturation(-0.25f).Brightness(0.06f).Contrast(-0.12f),
+                _ => pipeline,
+            };
+
+            if (_warmth != 0) pipeline = pipeline.Temperature(_warmth);
+            if (_vignette > 0) pipeline = pipeline.Vignette(_vignette);
+
+            var composed = await pipeline.ExecuteAsync(_source);
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(_caption)) await DrawCaptionAsync(composed);
+                _result?.Dispose();
+                _result = composed;
+                _version++;
+                _encoded = await Exporter.EncodeWithFallbackAsync(_result, [ImageFormat.WebP, ImageFormat.Jpeg], new ImageExportOptions
+                {
+                    Quality = 0.86,
+                    Metadata = MetadataPolicy.Remove,
+                });
+            }
+            catch
+            {
+                if (!ReferenceEquals(composed, _result)) composed.Dispose();
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Draws the caption across the lower third, over an optional gradient scrim so it stays readable.</summary>
+    private async Task DrawCaptionAsync(ImageBuffer image)
+    {
+        using var canvas = ImageCanvas.FromBuffer(image);
+        var fontSize = image.Height * (_captionSize / 100f);
+        var style = new TextStyle
+        {
+            FontFamily = "system-ui, sans-serif",
+            FontSize = fontSize,
+            Bold = true,
+            FillColor = _captionColor,
+            Alignment = TextAlignment.Center,
+            Baseline = TextBaseline.Bottom,
+            MaxWidth = image.Width * 0.86f,
+            LineHeight = 1.15f,
+        };
+
+        var metrics = await TextRasterizer.MeasureAsync(_caption, style);
+        var margin = image.Height * 0.06f;
+        var baseline = image.Height - margin;
+
+        if (_scrim)
+        {
+            // A soft gradient rather than a hard band, so the photo still shows through.
+            var top = Math.Max(0, baseline - metrics.Height - margin);
+            var height = image.Height - top;
+            var paint = new LinearGradientPaint(
+                new Vector2(0, top),
+                new Vector2(0, image.Height),
+                [(0f, new Rgba32(0, 0, 0, 0)), (0.55f, new Rgba32(0, 0, 0, 120)), (1f, new Rgba32(0, 0, 0, 175))]);
+            var scrimPath = new PathBuilder().AddRectangle(new System.Drawing.RectangleF(0, top, image.Width, height)).Build();
+            canvas.FillPath(scrimPath, paint);
+        }
+
+        await TextRasterizer.DrawTextAsync(canvas, _caption, new Vector2(image.Width / 2f, baseline), style);
+    }
+
+    private async Task Download()
+    {
+        if (_encoded is null) return;
+        try
+        {
+            await Exporter.DownloadAsync(_encoded, $"social-{_preset.Width}x{_preset.Height}");
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+    }
+
+    private void Clear()
+    {
+        _source?.Dispose();
+        _result?.Dispose();
+        _source = null;
+        _result = null;
+        _encoded = null;
+        _error = null;
+    }
+
+    private static string Format(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
+    };
+
+    private static string Describe(Exception ex) => ex switch
+    {
+        ImageLimitExceededException => "That image is too large to process here.",
+        ImageDecodeException => "That file could not be read as an image.",
+        ImageCapabilityException c => c.Message,
+        _ => ex.Message,
+    };
+
+    public void Dispose()
+    {
+        _debounce.Dispose();
+        _source?.Dispose();
+        _result?.Dispose();
+    }
+}

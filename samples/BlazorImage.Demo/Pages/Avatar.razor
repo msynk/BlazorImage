@@ -1,0 +1,376 @@
+@page "/avatar"
+@using BlazorImage.Analysis
+@implements IDisposable
+@inject ImageLoader Loader
+@inject ImageExporter Exporter
+@inject IImageCapabilityProvider Capabilities
+
+<PageTitle>Avatar editor — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>Avatar editor</h1>
+    <p class="lede">
+        Upload, crop to a square or circle, resize, and compress to a byte budget. The exported file is WebP where the
+        browser supports it and JPEG otherwise, with every trace of location metadata removed.
+    </p>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-error" role="alert">@_error</div>
+}
+
+<div class="split">
+    <div class="card">
+        @if (_source is null)
+        {
+            <ImageDropZone Label="Drop a photo here, or click to choose one" OnFilesSelected="OnFilesSelected" />
+        }
+        else
+        {
+            <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start">
+                <div>
+                    <p class="card-title">Result</p>
+                    <div style="width:@(PreviewSize)px; height:@(PreviewSize)px; border-radius:@(_circular ? "50%" : "12px"); overflow:hidden; border:1px solid var(--border)">
+                        <ImagePreview Image="_result" Version="_resultVersion" Alt="Avatar preview" Style="width:100%;height:100%;object-fit:cover;border:none;border-radius:0" />
+                    </div>
+                </div>
+                <div style="flex:1 1 200px; min-width:180px">
+                    <p class="card-title">Source</p>
+                    <ImagePreview Image="_source" Alt="Uploaded photo" Style="max-height:200px" />
+                    <p class="small muted" style="margin-top:8px">
+                        @_source.Width × @_source.Height
+                        @if (_sourceBytes > 0)
+                        {
+                            <text> · @Format(_sourceBytes)</text>
+                        }
+                    </p>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="card">
+        <p class="card-title">Options</p>
+
+        <div class="field">
+            <label class="field-label" for="size">Output size <span class="field-value">@_size px</span></label>
+            <input id="size" type="range" min="64" max="1024" step="32" value="@_size"
+                   @oninput="OnSizeChanged" />
+        </div>
+
+        <div class="field field-inline">
+            <input id="circular" type="checkbox" checked="@_circular" @onchange="OnCircularChanged" />
+            <label class="field-label" for="circular" style="margin:0">Circular mask</label>
+        </div>
+
+        <div class="field">
+            <label class="field-label" for="budget">Size budget <span class="field-value">@(_budgetKb) KB</span></label>
+            <input id="budget" type="range" min="10" max="500" step="10" value="@_budgetKb"
+                   @oninput="OnBudgetChanged" />
+        </div>
+
+        <div class="field">
+            <span class="field-label">Framing</span>
+            <div class="chip-row">
+                <button type="button" class="chip" aria-pressed="@_smart" @onclick="() => SetSmart(true)">Smart</button>
+                @foreach (var anchor in new[] { Anchor.Center, Anchor.Top, Anchor.Bottom })
+                {
+                    <button type="button" class="chip" aria-pressed="@(!_smart && _anchor == anchor)"
+                            @onclick="() => SetAnchor(anchor)">@anchor</button>
+                }
+            </div>
+            <span class="small muted">
+                Smart framing scores detail, colour and skin tones to find the subject, instead of assuming it is in the
+                middle. Centre-cropping a portrait is how avatars lose the top of a head.
+            </span>
+        </div>
+
+        @if (_dominant.Count > 0)
+        {
+            <div class="field">
+                <span class="field-label">Dominant colours</span>
+                <div class="chip-row">
+                    @foreach (var colour in _dominant)
+                    {
+                        <span class="chip" style="background:@colour.Color.ToHex(false); color:@(colour.Color.Luminance > 140 ? "#111" : "#fff"); border-color:transparent"
+                              title="@colour.Color.ToHex(false)">
+                            @FormatShare(colour.Percent)
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (_encoded is not null)
+        {
+            <hr style="border:none; border-top:1px solid var(--border); margin:16px 0" />
+            <div class="stat-grid">
+                <div class="stat">
+                    <span class="stat-label">Format</span>
+                    <span class="stat-value">@_encoded.Format.ToString().ToUpperInvariant()</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Size</span>
+                    <span class="stat-value @(_encoded.Length <= _budgetKb * 1024 ? "good" : "")">@Format(_encoded.Length)</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Quality</span>
+                    <span class="stat-value">@(_encoded.Quality is { } q ? $"{q:0.00}" : "—")</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Saved</span>
+                    <span class="stat-value good">@(_sourceBytes > 0 ? $"{100 - _encoded.Length * 100.0 / _sourceBytes:0}%" : "—")</span>
+                </div>
+            </div>
+        }
+
+        <div class="btn-row" style="margin-top:16px">
+            <button class="btn btn-primary" disabled="@(_encoded is null || _busy)" @onclick="Download">Download</button>
+            <button class="btn" disabled="@(_source is null)" @onclick="Clear">Start over</button>
+        </div>
+
+        @if (_fallbackNotice is not null)
+        {
+            <p class="small muted" style="margin-top:10px; margin-bottom:0">@_fallbackNotice</p>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <p class="card-title">The pipeline behind this page</p>
+    <pre class="code">@Snippet</pre>
+</div>
+
+@code {
+    private ImageBuffer? _source;
+    private ImageBuffer? _result;
+    private EncodedImage? _encoded;
+    private long _resultVersion;
+    private long _sourceBytes;
+    private int _size = 256;
+    private int _budgetKb = 80;
+    private bool _circular = true;
+    private Anchor _anchor = Anchor.Center;
+    private bool _smart = true;
+    private IReadOnlyList<ColorFrequency> _dominant = [];
+    private bool _busy;
+    private string? _error;
+    private string? _fallbackNotice;
+    private ImageCapabilities? _capabilities;
+    private readonly Debouncer _debounce = new(200);
+
+    private int PreviewSize => Math.Min(_size, 220);
+
+    protected override async Task OnInitializedAsync() => _capabilities = await Capabilities.GetAsync();
+
+    private const string Snippet = """
+        // Square crop from the middle, high quality downscale, gentle sharpen,
+        // then compress until it fits the budget. Circular masks are a pixel
+        // operation, so they survive the resize rather than being a CSS trick.
+        var pipeline = ImagePipeline.Create()
+            .AutoOrient()
+            .SmartCrop(AspectRatio.Square)     // finds the subject instead of assuming the centre
+            .Resize(size, size, ResizeMode.Stretch)
+            .Sharpen(amount: 0.25f);
+
+        using var avatar = pipeline.Execute(source);
+        if (circular) ApplyCircularMask(avatar);
+
+        var encoded = await exporter.EncodeWithFallbackAsync(
+            avatar,
+            [ImageFormat.WebP, ImageFormat.Jpeg],
+            new ImageExportOptions
+            {
+                Quality     = 0.9,
+                MaxFileSize = budgetKb * 1024,
+                Metadata    = MetadataPolicy.Remove,
+                Background  = Rgba32.White,
+            });
+        """;
+
+    private async Task OnFilesSelected(IReadOnlyList<IBrowserFile> files)
+    {
+        if (files.Count == 0) return;
+        _error = null;
+        _busy = true;
+        try
+        {
+            _source?.Dispose();
+            _sourceBytes = files[0].Size;
+            _source = await Loader.LoadAsync(files[0]);
+            _dominant = ImageStatistics.GetDominantColors(_source, 5, ignoreNearWhiteAndBlack: true);
+            await Regenerate();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnSizeChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value)) return;
+        _size = value;
+        // Re-encoding on every pixel of slider travel would queue work faster than it finishes.
+        _debounce.Schedule(async _ => await Regenerate());
+    }
+
+    private void OnBudgetChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value)) return;
+        _budgetKb = value;
+        _debounce.Schedule(async _ => await Regenerate());
+    }
+
+    private async Task OnCircularChanged(ChangeEventArgs e)
+    {
+        _circular = (bool)(e.Value ?? false);
+        await Regenerate();
+    }
+
+    private async Task SetAnchor(Anchor anchor)
+    {
+        _smart = false;
+        _anchor = anchor;
+        await Regenerate();
+    }
+
+    private async Task SetSmart(bool smart)
+    {
+        _smart = smart;
+        await Regenerate();
+    }
+
+    private async Task Regenerate()
+    {
+        if (_source is null) return;
+        _busy = true;
+        _error = null;
+        _fallbackNotice = null;
+        StateHasChanged();
+        try
+        {
+            // Smart framing picks where to crop; the fixed anchors are there to compare against.
+            var pipeline = _smart
+                ? ImagePipeline.Create().AutoOrient().SmartCrop(AspectRatio.Square).Resize(_size, _size, ResizeMode.Stretch).Sharpen(0.25f)
+                : ImagePipeline.Create().AutoOrient().Cover(_size, _size, _anchor).Sharpen(0.25f);
+
+            var next = await pipeline.ExecuteAsync(_source);
+            if (_circular) ApplyCircularMask(next);
+
+            _result?.Dispose();
+            _result = next;
+            _resultVersion++;
+
+            var preferred = new[] { ImageFormat.WebP, ImageFormat.Jpeg };
+            // A circular avatar needs transparency, so a lossy opaque format would show the corners.
+            if (_circular) preferred = [ImageFormat.WebP, ImageFormat.Png];
+
+            _encoded = await Exporter.EncodeWithFallbackAsync(next, preferred, new ImageExportOptions
+            {
+                Quality = 0.9,
+                MaxFileSize = _budgetKb * 1024L,
+                MinQuality = 0.5,
+                Metadata = MetadataPolicy.Remove,
+                Background = Rgba32.White,
+            });
+
+            if (_capabilities is { } caps && !caps.CanEncode(ImageFormat.WebP))
+                _fallbackNotice = $"This browser cannot write WebP, so {_encoded.Format.ToString().ToUpperInvariant()} was used instead.";
+        }
+        catch (ImageEncodeException)
+        {
+            _error = "That budget is too small for this image even at the lowest quality. Try a larger budget or a smaller output size.";
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Clears the pixels outside an inscribed circle, with a one pixel feather so the edge is not jagged.
+    /// Done on the pixels rather than in CSS so the exported file is genuinely round.
+    /// </summary>
+    private static void ApplyCircularMask(ImageBuffer image)
+    {
+        var cx = image.Width / 2f;
+        var cy = image.Height / 2f;
+        var radius = MathF.Min(cx, cy);
+        for (var y = 0; y < image.Height; y++)
+        {
+            var row = image.GetRow(y);
+            var dy = y + 0.5f - cy;
+            for (var x = 0; x < image.Width; x++)
+            {
+                var dx = x + 0.5f - cx;
+                var distance = MathF.Sqrt(dx * dx + dy * dy);
+                if (distance <= radius - 1) continue;
+                var coverage = Math.Clamp(radius - distance, 0f, 1f);
+                var p = row[x];
+                row[x] = p.WithAlpha((byte)(p.A * coverage));
+            }
+        }
+    }
+
+    private async Task Download()
+    {
+        if (_encoded is null) return;
+        try
+        {
+            await Exporter.DownloadAsync(_encoded, "avatar");
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+    }
+
+    private void Clear()
+    {
+        _source?.Dispose();
+        _result?.Dispose();
+        _source = null;
+        _result = null;
+        _encoded = null;
+        _sourceBytes = 0;
+        _error = null;
+    }
+
+    /// <summary>A smooth photograph has no single dominant colour, so small shares need a decimal to stay meaningful.</summary>
+    private static string FormatShare(double percent) => percent >= 1
+        ? $"{percent:0}%"
+        : percent >= 0.1 ? $"{percent:0.0}%" : "<0.1%";
+
+    private static string Format(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
+    };
+
+    private static string Describe(Exception ex) => ex switch
+    {
+        ImageLimitExceededException => "That image is larger than this page allows.",
+        ImageDecodeException => "That file could not be read as an image.",
+        ImageCapabilityException c => c.Message,
+        _ => $"Something went wrong: {ex.Message}",
+    };
+
+    public void Dispose()
+    {
+        _debounce.Dispose();
+        _source?.Dispose();
+        _result?.Dispose();
+    }
+}

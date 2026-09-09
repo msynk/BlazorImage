@@ -1,0 +1,169 @@
+@page "/annotate"
+@implements IDisposable
+@inject ImageLoader Loader
+@inject ImageExporter Exporter
+@inject IImageCapabilityProvider Capabilities
+
+<PageTitle>Screenshot annotation — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>Screenshot annotation</h1>
+    <p class="lede">
+        Paste a screenshot, point at the problem, and black out anything that must not leave the building. Annotations
+        stay editable objects until you export, so nothing is baked in until you say so.
+    </p>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-error" role="alert">@_error</div>
+}
+@if (!HasImage && _capabilities?.SupportsClipboardRead == true)
+{
+    <div class="alert alert-info">
+        Press <strong>Ctrl+V</strong> anywhere on this page, or use the paste button, to bring in a screenshot from the clipboard.
+    </div>
+}
+
+<div class="btn-row" style="margin-bottom:14px">
+    <button class="btn" disabled="@(_capabilities?.SupportsClipboardRead != true)" @onclick="PasteAsync">Paste from clipboard</button>
+    <button class="btn" disabled="@(!HasImage)" @onclick="AddSampleAnnotations">Add a worked example</button>
+    <button class="btn" disabled="@(!HasImage)" @onclick="Clear">Start over</button>
+</div>
+
+<div class="editor-frame">
+    <ImageEditor @ref="_editor"
+                 Image="_source"
+                 Class="bi-theme-auto"
+                 ExportOptions="ExportOptions"
+                 OnImageLoaded="OnEditorImageLoaded"
+                 OnError="OnEditorError" />
+</div>
+
+<div class="card" style="margin-top:16px">
+    <p class="card-title">Redaction that actually redacts</p>
+    <p class="small muted">
+        The redaction tool replaces the pixels underneath it, so the hidden content is genuinely gone from the exported
+        file rather than covered by a layer someone can move. Solid blocks are the safe choice: a strong blur is usually
+        irreversible in practice, but a solid rectangle removes all doubt. Redactions are always drawn before other
+        annotations, so an arrow you place on top is never blurred away.
+    </p>
+    <pre class="code">@Snippet</pre>
+</div>
+
+@code {
+    private ImageEditor? _editor;
+    private ImageBuffer? _source;
+    private ImageCapabilities? _capabilities;
+    private string? _error;
+
+    /// <summary>The editor owns the image once loaded, whether it came from here or from its own drop zone.</summary>
+    private bool HasImage => _editor?.Session is not null;
+
+    private static readonly ImageExportOptions ExportOptions = new()
+    {
+        Format = ImageFormat.Png,
+        Metadata = MetadataPolicy.Remove,
+    };
+
+    private const string Snippet = """
+        // Annotations are records, so building one is a value, not a mutation.
+        await editor.AddAnnotationAsync(new RedactionAnnotation
+        {
+            Rectangle = new RectangleF(40, 120, 320, 28),
+            Mode      = RedactionMode.Solid,   // Pixelate and Blur are also available
+        });
+
+        await editor.AddAnnotationAsync(new ArrowAnnotation
+        {
+            Start = new Vector2(500, 380),
+            End   = new Vector2(360, 220),
+            Style = ShapeStyle.Default with { Stroke = new StrokeStyle { Width = 6 } },
+        });
+        """;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _capabilities = await Capabilities.GetAsync();
+        StateHasChanged();
+    }
+
+    private async Task PasteAsync()
+    {
+        _error = null;
+        try
+        {
+            var image = await Loader.LoadFromClipboardAsync();
+            if (image is null)
+            {
+                _error = "There is no image on the clipboard.";
+                return;
+            }
+            _source?.Dispose();
+            _source = image;
+        }
+        catch (Exception ex)
+        {
+            _error = ex is ImageCapabilityException c ? c.Message : $"Could not read the clipboard: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Places a realistic set of annotations so the page demonstrates the model without needing the user to draw.
+    /// Coordinates are relative to the image so the example fits whatever was pasted.
+    /// </summary>
+    private async Task AddSampleAnnotations()
+    {
+        if (_editor?.Session is not { } session) return;
+        var w = session.OutputSize.Width;
+        var h = session.OutputSize.Height;
+
+        await _editor.AddAnnotationAsync(new RedactionAnnotation
+        {
+            Rectangle = new System.Drawing.RectangleF(w * 0.06f, h * 0.10f, w * 0.34f, h * 0.06f),
+            Mode = RedactionMode.Solid,
+        }, "Redact");
+
+        await _editor.AddAnnotationAsync(new RectangleAnnotation
+        {
+            Rectangle = new System.Drawing.RectangleF(w * 0.52f, h * 0.30f, w * 0.36f, h * 0.22f),
+            Style = ShapeStyle.Default with { Stroke = new StrokeStyle { Width = MathF.Max(3, w / 300f) } },
+        }, "Rectangle");
+
+        await _editor.AddAnnotationAsync(new ArrowAnnotation
+        {
+            Start = new Vector2(w * 0.30f, h * 0.78f),
+            End = new Vector2(w * 0.56f, h * 0.46f),
+            Style = ShapeStyle.Default with { Stroke = new StrokeStyle { Width = MathF.Max(4, w / 220f) } },
+        }, "Arrow");
+
+        await _editor.AddAnnotationAsync(new StepAnnotation
+        {
+            Center = new Vector2(w * 0.26f, h * 0.82f),
+            Number = 1,
+            Radius = MathF.Max(14, w / 45f),
+        }, "Step");
+
+        await _editor.AddAnnotationAsync(new HighlightAnnotation
+        {
+            Rectangle = new System.Drawing.RectangleF(w * 0.06f, h * 0.60f, w * 0.30f, h * 0.05f),
+        }, "Highlight");
+    }
+
+    private void OnEditorError(Exception ex) => _error = ex.Message;
+
+    // The editor can load an image through its own drop zone, so the page has to re-render to enable its buttons.
+    private void OnEditorImageLoaded(ImageBuffer image) => StateHasChanged();
+
+    private async Task Clear()
+    {
+        _source?.Dispose();
+        _source = null;
+        _error = null;
+        if (_editor is not null) await _editor.DisposeAsync();
+        StateHasChanged();
+    }
+
+    public void Dispose() => _source?.Dispose();
+}

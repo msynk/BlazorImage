@@ -1,0 +1,776 @@
+/*
+ * BlazorImage editor styles.
+ *
+ * Everything is driven by custom properties on .bi-editor, so a host restyles the whole editor by overriding a handful
+ * of variables rather than fighting specificity. Dark mode, right-to-left layout, high contrast and reduced motion are
+ * all handled here; no component hard-codes a colour.
+ */
+
+.bi-editor {
+    /* Surfaces */
+    --bi-bg: #ffffff;
+    --bi-bg-subtle: #f5f6f8;
+    --bi-bg-sunken: #e9ebef;
+    --bi-canvas-bg: #6b7280;
+    --bi-border: #d5d8de;
+
+    /* Text */
+    --bi-text: #14161a;
+    --bi-text-muted: #5c626e;
+
+    /* Accent */
+    --bi-accent: #2563eb;
+    --bi-accent-text: #ffffff;
+    --bi-accent-subtle: #dbe6fe;
+    --bi-danger: #dc2626;
+
+    /* Metrics */
+    --bi-radius: 8px;
+    --bi-radius-sm: 5px;
+    --bi-gap: 8px;
+    --bi-toolbar-height: 48px;
+    --bi-panel-width: 280px;
+    --bi-focus-ring: 2px solid var(--bi-accent);
+    --bi-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 1px 2px rgb(0 0 0 / 0.08);
+    --bi-transition: 120ms ease;
+
+    display: flex;
+    flex-direction: column;
+    min-height: 320px;
+    height: 100%;
+    background: var(--bi-bg);
+    color: var(--bi-text);
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius);
+    overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    /* Contains the absolutely positioned overlays. */
+    position: relative;
+}
+
+@media (prefers-color-scheme: dark) {
+    .bi-editor:not(.bi-theme-light) {
+        --bi-bg: #16181d;
+        --bi-bg-subtle: #1e2128;
+        --bi-bg-sunken: #101216;
+        --bi-canvas-bg: #26292f;
+        --bi-border: #2f333c;
+        --bi-text: #e8eaed;
+        --bi-text-muted: #9aa1ad;
+        --bi-accent: #4f83f1;
+        --bi-accent-text: #0b0d10;
+        --bi-accent-subtle: #1d2b4a;
+        --bi-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    }
+}
+
+/* An explicit dark theme, for hosts that manage the theme themselves. */
+.bi-editor.bi-theme-dark {
+    --bi-bg: #16181d;
+    --bi-bg-subtle: #1e2128;
+    --bi-bg-sunken: #101216;
+    --bi-canvas-bg: #26292f;
+    --bi-border: #2f333c;
+    --bi-text: #e8eaed;
+    --bi-text-muted: #9aa1ad;
+    --bi-accent: #4f83f1;
+    --bi-accent-text: #0b0d10;
+    --bi-accent-subtle: #1d2b4a;
+}
+
+/* ---- Layout ---- */
+
+.bi-editor-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.bi-editor-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bi-canvas-bg);
+    overflow: hidden;
+}
+
+/* ---- Toolbar ---- */
+
+.bi-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--bi-gap);
+    min-height: var(--bi-toolbar-height);
+    padding: 6px 10px;
+    background: var(--bi-bg-subtle);
+    border-bottom: 1px solid var(--bi-border);
+    flex-wrap: wrap;
+}
+
+.bi-toolgroup {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    background: var(--bi-bg);
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius-sm);
+}
+
+.bi-toolbar-spacer {
+    flex: 1 1 auto;
+}
+
+.bi-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 32px;
+    padding: 0 6px;
+    border: none;
+    border-radius: var(--bi-radius-sm);
+    background: transparent;
+    color: var(--bi-text);
+    cursor: pointer;
+    transition: background var(--bi-transition), color var(--bi-transition);
+}
+
+.bi-tool:hover:not(:disabled) {
+    background: var(--bi-bg-sunken);
+}
+
+.bi-tool-active {
+    background: var(--bi-accent);
+    color: var(--bi-accent-text);
+}
+
+.bi-tool-active:hover:not(:disabled) {
+    background: var(--bi-accent);
+}
+
+.bi-tool:disabled,
+.bi-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.bi-zoom-value {
+    min-width: 52px;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+
+.bi-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius-sm);
+    background: var(--bi-bg);
+    color: var(--bi-text);
+    font: inherit;
+    cursor: pointer;
+    transition: background var(--bi-transition), border-color var(--bi-transition);
+}
+
+.bi-button:hover:not(:disabled) {
+    background: var(--bi-bg-sunken);
+}
+
+.bi-button-primary {
+    background: var(--bi-accent);
+    border-color: var(--bi-accent);
+    color: var(--bi-accent-text);
+}
+
+.bi-button-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--bi-accent);
+}
+
+.bi-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--bi-radius-sm);
+    background: transparent;
+    color: var(--bi-text-muted);
+    cursor: pointer;
+}
+
+.bi-icon-button:hover {
+    background: var(--bi-bg-sunken);
+    color: var(--bi-danger);
+}
+
+/* ---- Canvas ---- */
+
+.bi-canvas-host {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    /* The editor handles its own gestures; the browser must not scroll or zoom the page underneath. */
+    touch-action: none;
+    outline: none;
+}
+
+.bi-canvas-host:focus-visible {
+    outline: var(--bi-focus-ring);
+    outline-offset: -2px;
+}
+
+.bi-canvas {
+    display: block;
+    /* A checkerboard makes transparency obvious rather than looking like white. */
+    background-color: #ffffff;
+    background-image:
+        linear-gradient(45deg, #d9dce1 25%, transparent 25%),
+        linear-gradient(-45deg, #d9dce1 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #d9dce1 75%),
+        linear-gradient(-45deg, transparent 75%, #d9dce1 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    box-shadow: var(--bi-shadow);
+    /* Preserve hard pixel edges when zoomed in past 100%. */
+    image-rendering: auto;
+    transform-origin: center;
+}
+
+/* ---- Crop overlay ---- */
+
+.bi-crop-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.bi-crop-shade {
+    position: absolute;
+    background: rgb(0 0 0 / 0.5);
+}
+
+.bi-crop-frame {
+    position: absolute;
+    border: 1px solid #ffffff;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+    pointer-events: auto;
+    cursor: move;
+}
+
+/* Rule-of-thirds guides. */
+.bi-crop-frame::before,
+.bi-crop-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.45;
+}
+
+.bi-crop-frame::before {
+    background-image: linear-gradient(to right, transparent calc(33.33% - 0.5px), #fff calc(33.33% - 0.5px), #fff calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+                      linear-gradient(to right, transparent calc(66.66% - 0.5px), #fff calc(66.66% - 0.5px), #fff calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+}
+
+.bi-crop-frame::after {
+    background-image: linear-gradient(to bottom, transparent calc(33.33% - 0.5px), #fff calc(33.33% - 0.5px), #fff calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+                      linear-gradient(to bottom, transparent calc(66.66% - 0.5px), #fff calc(66.66% - 0.5px), #fff calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+}
+
+.bi-crop-handle {
+    position: absolute;
+    /* Large enough to hit with a finger; 24px is the minimum comfortable touch target. */
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    pointer-events: auto;
+    cursor: pointer;
+}
+
+.bi-crop-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translate(-50%, -50%);
+    background: #ffffff;
+    border: 1px solid rgb(0 0 0 / 0.5);
+    border-radius: 2px;
+}
+
+.bi-crop-handle:focus-visible {
+    outline: var(--bi-focus-ring);
+}
+
+.bi-handle-topleft     { top: -12px; inset-inline-start: -12px; cursor: nwse-resize; }
+.bi-handle-top         { top: -12px; inset-inline-start: calc(50% - 12px); cursor: ns-resize; }
+.bi-handle-topright    { top: -12px; inset-inline-end: -12px; cursor: nesw-resize; }
+.bi-handle-left        { top: calc(50% - 12px); inset-inline-start: -12px; cursor: ew-resize; }
+.bi-handle-right       { top: calc(50% - 12px); inset-inline-end: -12px; cursor: ew-resize; }
+.bi-handle-bottomleft  { bottom: -12px; inset-inline-start: -12px; cursor: nesw-resize; }
+.bi-handle-bottom      { bottom: -12px; inset-inline-start: calc(50% - 12px); cursor: ns-resize; }
+.bi-handle-bottomright { bottom: -12px; inset-inline-end: -12px; cursor: nwse-resize; }
+
+/* ---- Selection ---- */
+
+.bi-selection {
+    position: absolute;
+    border: 1px dashed var(--bi-accent);
+    background: rgb(37 99 235 / 0.08);
+    pointer-events: none;
+}
+
+/* ---- Panel ---- */
+
+.bi-panel {
+    display: flex;
+    flex-direction: column;
+    width: var(--bi-panel-width);
+    flex: 0 0 var(--bi-panel-width);
+    background: var(--bi-bg);
+    border-inline-start: 1px solid var(--bi-border);
+    overflow: hidden;
+}
+
+.bi-panel-tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--bi-border);
+    background: var(--bi-bg-subtle);
+    scrollbar-width: thin;
+}
+
+.bi-panel-tab {
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--bi-text-muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color var(--bi-transition), border-color var(--bi-transition);
+}
+
+.bi-panel-tab:hover {
+    color: var(--bi-text);
+}
+
+.bi-panel-tab-active {
+    color: var(--bi-accent);
+    border-bottom-color: var(--bi-accent);
+}
+
+.bi-panel-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 12px;
+    outline: none;
+}
+
+.bi-panel-body:focus-visible {
+    outline: var(--bi-focus-ring);
+    outline-offset: -2px;
+}
+
+.bi-fieldset {
+    border: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bi-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.bi-field-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+
+.bi-field-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--bi-text-muted);
+}
+
+.bi-field-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--bi-text);
+}
+
+.bi-field-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.bi-slider {
+    width: 100%;
+    accent-color: var(--bi-accent);
+    /* Keep the thumb comfortably draggable on touch screens. */
+    height: 24px;
+}
+
+.bi-slider:focus-visible {
+    outline: var(--bi-focus-ring);
+    outline-offset: 2px;
+}
+
+.bi-color {
+    width: 100%;
+    height: 32px;
+    padding: 2px;
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius-sm);
+    background: var(--bi-bg);
+    cursor: pointer;
+}
+
+.bi-select {
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius-sm);
+    background: var(--bi-bg);
+    color: var(--bi-text);
+    font: inherit;
+}
+
+.bi-readout {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--bi-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.bi-note {
+    opacity: 0.7;
+}
+
+.bi-empty {
+    margin: 0;
+    padding: 16px 0;
+    text-align: center;
+    color: var(--bi-text-muted);
+}
+
+/* ---- Filters ---- */
+
+.bi-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: 8px;
+}
+
+.bi-filter {
+    padding: 10px 6px;
+    border: 1px solid var(--bi-border);
+    border-radius: var(--bi-radius-sm);
+    background: var(--bi-bg);
+    color: var(--bi-text);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color var(--bi-transition), background var(--bi-transition);
+}
+
+.bi-filter:hover:not(:disabled) {
+    background: var(--bi-bg-sunken);
+}
+
+.bi-filter-active {
+    border-color: var(--bi-accent);
+    background: var(--bi-accent-subtle);
+}
+
+/* ---- Layers and history ---- */
+
+.bi-layer-list,
+.bi-history-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bi-layer {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: var(--bi-radius-sm);
+}
+
+.bi-layer-selected {
+    background: var(--bi-accent-subtle);
+}
+
+.bi-layer-name,
+.bi-history-button {
+    flex: 1 1 auto;
+    padding: 7px 8px;
+    border: none;
+    border-radius: var(--bi-radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.bi-layer-name:hover,
+.bi-history-button:hover {
+    background: var(--bi-bg-sunken);
+}
+
+.bi-history-entry {
+    border-radius: var(--bi-radius-sm);
+}
+
+.bi-history-current {
+    background: var(--bi-accent-subtle);
+    font-weight: 600;
+}
+
+.bi-history-future {
+    opacity: 0.45;
+}
+
+/* ---- Drop zone ---- */
+
+.bi-dropzone {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: min(520px, 90%);
+    min-height: 220px;
+    border: 2px dashed var(--bi-border);
+    border-radius: var(--bi-radius);
+    background: var(--bi-bg);
+    transition: border-color var(--bi-transition), background var(--bi-transition);
+}
+
+.bi-dropzone-active {
+    border-color: var(--bi-accent);
+    background: var(--bi-accent-subtle);
+}
+
+/* The input stays in the layout so it can receive focus, but is visually replaced by the label. */
+.bi-dropzone-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.bi-dropzone-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+    color: var(--bi-text-muted);
+    pointer-events: none;
+}
+
+.bi-dropzone-input:focus-visible + .bi-dropzone-label {
+    outline: var(--bi-focus-ring);
+    outline-offset: 4px;
+    border-radius: var(--bi-radius);
+}
+
+.bi-dropzone-icon {
+    color: var(--bi-text-muted);
+    opacity: 0.7;
+}
+
+.bi-dropzone-text {
+    font-size: 14px;
+}
+
+/* ---- Status ---- */
+
+.bi-busy {
+    position: absolute;
+    inset-block-start: 12px;
+    inset-inline-end: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.65);
+    color: #fff;
+    font-size: 12px;
+}
+
+.bi-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgb(255 255 255 / 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: bi-spin 700ms linear infinite;
+}
+
+@keyframes bi-spin {
+    to { transform: rotate(360deg); }
+}
+
+.bi-message {
+    position: absolute;
+    inset-block-end: 12px;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(90%, 520px);
+    padding: 10px 14px;
+    border-radius: var(--bi-radius-sm);
+    background: var(--bi-bg);
+    border: 1px solid var(--bi-border);
+    box-shadow: var(--bi-shadow);
+    font-size: 13px;
+}
+
+.bi-message-error {
+    border-color: var(--bi-danger);
+    color: var(--bi-danger);
+}
+
+.bi-message-dismiss {
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+/* ---- Accessibility helpers ---- */
+
+.bi-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+.bi-editor :focus-visible {
+    outline: var(--bi-focus-ring);
+    outline-offset: 1px;
+}
+
+/* Prerendered output is inert until interactivity arrives; make that visible rather than looking broken. */
+.bi-prerender .bi-toolbar,
+.bi-prerender .bi-panel {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* ---- Responsive: stack the panel below the canvas on narrow screens ---- */
+
+@media (max-width: 720px) {
+    .bi-editor-body {
+        flex-direction: column;
+    }
+
+    .bi-panel {
+        width: 100%;
+        flex: 0 0 auto;
+        max-height: 45%;
+        border-inline-start: none;
+        border-block-start: 1px solid var(--bi-border);
+    }
+
+    .bi-toolbar {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+
+    .bi-tool {
+        /* Comfortable touch targets on phones. */
+        min-width: 40px;
+        height: 40px;
+    }
+}
+
+/* ---- Reduced motion ---- */
+
+@media (prefers-reduced-motion: reduce) {
+    .bi-editor,
+    .bi-editor * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .bi-spinner {
+        animation: none;
+        border-top-color: transparent;
+    }
+}
+
+/* ---- High contrast ---- */
+
+@media (forced-colors: active) {
+    .bi-editor {
+        --bi-border: CanvasText;
+        --bi-accent: Highlight;
+        --bi-accent-text: HighlightText;
+    }
+
+    .bi-tool-active,
+    .bi-button-primary {
+        forced-color-adjust: none;
+        background: Highlight;
+        color: HighlightText;
+    }
+
+    .bi-crop-frame,
+    .bi-selection {
+        border-color: CanvasText;
+    }
+}

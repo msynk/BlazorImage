@@ -1,0 +1,241 @@
+@page "/headless"
+@implements IDisposable
+@inject ImageLoader Loader
+@inject ImageExporter Exporter
+@inject ImageProcessorFactory Processors
+
+<PageTitle>Headless API — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>The headless API</h1>
+    <p class="lede">
+        Not a single component on this page uses the editor. Everything below is the same engine driven from plain C#,
+        which is how you would use it in an upload handler, a thumbnail service, or a console tool.
+    </p>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-error" role="alert">@_error</div>
+}
+
+<div class="card">
+    <ImageDropZone Label="Drop an image to run every example against it" OnFilesSelected="OnFilesSelected" />
+</div>
+
+@if (_source is not null)
+{
+    <div class="card">
+        <p class="card-title">Source</p>
+        <div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start">
+            <ImagePreview Image="_source" Alt="Source image" Style="max-height:180px" />
+            <table class="data" style="flex:1 1 260px">
+                <tbody>
+                    <tr><th scope="row">Dimensions</th><td class="num">@_source.Width × @_source.Height</td></tr>
+                    <tr><th scope="row">Pixels in memory</th><td class="num">@Format(_source.ByteLength)</td></tr>
+                    <tr><th scope="row">Source format</th><td>@(_source.Metadata?.SourceFormat.ToString() ?? "unknown")</td></tr>
+                    <tr><th scope="row">Transparency</th><td>@(_hasAlpha ? "yes" : "no")</td></tr>
+                    @if (_exif is not null)
+                    {
+                        <tr><th scope="row">Camera</th><td>@($"{_exif.Make} {_exif.Model}".Trim() is { Length: > 0 } c ? c : "—")</td></tr>
+                        <tr><th scope="row">Taken</th><td>@(_exif.DateTaken?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td></tr>
+                        <tr>
+                            <th scope="row">Location</th>
+                            <td>
+                                @if (_exif.Location is { } location)
+                                {
+                                    <span style="color:var(--danger)">@location.ToString() — removed on export</span>
+                                }
+                                else
+                                {
+                                    <text>none</text>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="grid">
+        @foreach (var example in _examples)
+        {
+            <div class="card">
+                <p class="card-title">@example.Title</p>
+                <ImagePreview Image="example.Image" Version="example.Version" Alt="@example.Title" Style="max-height:200px; width:100%; object-fit:contain" />
+                <p class="small muted" style="margin:8px 0 6px">@example.Description</p>
+                <p class="small mono" style="margin:0">@example.Image.Width × @example.Image.Height · @Format(example.Bytes)</p>
+                <pre class="code" style="margin-top:8px">@example.Code</pre>
+            </div>
+        }
+    </div>
+}
+
+<div class="card">
+    <p class="card-title">No browser at all</p>
+    <p class="small muted">
+        The same package works in a console app or an ASP.NET Core endpoint. Register the headless services and you get
+        the managed PNG, JPEG, BMP and GIF codecs with no JavaScript involved.
+    </p>
+    <pre class="code">@ServerSnippet</pre>
+</div>
+
+@code {
+    private sealed record Example(string Title, string Description, string Code, ImageBuffer Image, long Bytes, long Version);
+
+    private ImageBuffer? _source;
+    private readonly List<Example> _examples = [];
+    private BlazorImage.Metadata.ExifData? _exif;
+    private bool _hasAlpha;
+    private string? _error;
+    private long _version;
+
+    private const string ServerSnippet = """
+        // Program.cs of an API that accepts uploads
+        builder.Services.AddBlazorImageHeadless(o => o.Limits = ImageLimits.Default);
+
+        // In the endpoint
+        app.MapPost("/upload", async (IFormFile file, ImageProcessor processor) =>
+        {
+            using var stream = file.OpenReadStream();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+
+            var thumb = await processor.ProcessAsync(
+                buffer.ToArray(),
+                ImagePipeline.Create().AutoOrient().MaxSize(400, 400),
+                new ImageExportOptions { Format = ImageFormat.Jpeg, Quality = 0.8 });
+
+            return Results.File(thumb.Data, thumb.MimeType);
+        });
+        """;
+
+    private async Task OnFilesSelected(IReadOnlyList<IBrowserFile> files)
+    {
+        if (files.Count == 0) return;
+        _error = null;
+        try
+        {
+            Clear();
+            _source = await Loader.LoadAsync(files[0]);
+            _exif = _source.Metadata?.Exif;
+            _hasAlpha = _source.HasTransparency();
+            await BuildExamples();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+    }
+
+    private async Task BuildExamples()
+    {
+        if (_source is null) return;
+
+        await Add("Thumbnail",
+            "A capped, sharpened thumbnail: the single most common upload task.",
+            "ImagePipeline.Create()\n    .AutoOrient()\n    .MaxSize(320, 320)\n    .Sharpen(0.3f)",
+            ImagePipeline.Create().AutoOrient().MaxSize(320, 320).Sharpen(0.3f));
+
+        await Add("Square cover crop",
+            "Cover fills the target exactly, cropping the overflow instead of distorting.",
+            "ImagePipeline.Create()\n    .Cover(300, 300, Anchor.Center)",
+            ImagePipeline.Create().Cover(300, 300));
+
+        await Add("Letterboxed",
+            "Contain keeps the whole subject and pads to the exact canvas.",
+            "ImagePipeline.Create()\n    .Resize(400, 260, ResizeMode.Contain,\n            background: new Rgba32(24, 26, 31))",
+            ImagePipeline.Create().Resize(400, 260, ResizeMode.Contain, background: new Rgba32(24, 26, 31)));
+
+        await Add("Graded",
+            "Adjustments compose and fuse into a single pass over the pixels.",
+            "ImagePipeline.Create()\n    .MaxSize(360, 360)\n    .Exposure(0.3f)\n    .Contrast(0.15f)\n    .Vibrance(0.35f)\n    .Vignette(0.3f)",
+            ImagePipeline.Create().MaxSize(360, 360).Exposure(0.3f).Contrast(0.15f).Vibrance(0.35f).Vignette(0.3f));
+
+        await Add("Rotated 12°",
+            "Arbitrary rotation expands the canvas and keeps the corners transparent.",
+            "ImagePipeline.Create()\n    .MaxSize(300, 300)\n    .Rotate(12, background: Rgba32.Transparent)",
+            ImagePipeline.Create().MaxSize(300, 300).Rotate(12, Rgba32.Transparent));
+
+        await Add("Redacted region",
+            "Filters accept a region, so only part of the image is touched.",
+            "ImagePipeline.Create()\n    .MaxSize(360, 360)\n    .Pixelate(14, new Rectangle(0, 0, 180, 90))",
+            ImagePipeline.Create().MaxSize(360, 360).Pixelate(14, new System.Drawing.Rectangle(0, 0, 180, 90)));
+
+        await AddComposed();
+        StateHasChanged();
+    }
+
+    private async Task Add(string title, string description, string code, ImagePipeline pipeline)
+    {
+        var image = await pipeline.ExecuteAsync(_source!);
+        var encoded = await Exporter.EncodeAsync(image, new ImageExportOptions { Format = ImageFormat.Png });
+        _examples.Add(new Example(title, description, code, image, encoded.Length, ++_version));
+        StateHasChanged();
+        await Task.Yield();
+    }
+
+    /// <summary>Builds a composed card image with the drawing API to show it working without any editor UI.</summary>
+    private async Task AddComposed()
+    {
+        if (_source is null) return;
+        const int width = 420;
+        const int height = 240;
+        var canvas = ImageCanvas.Create(width, height, new Rgba32(17, 19, 24));
+        try
+        {
+            using var photo = await ImagePipeline.Create().Cover(180, height).ExecuteAsync(_source);
+            canvas.DrawImage(photo, new System.Drawing.RectangleF(width - 180, 0, 180, height));
+
+            // A gradient scrim so the photo blends into the panel rather than butting against it.
+            var fade = new LinearGradientPaint(
+                new Vector2(width - 180, 0), new Vector2(width - 110, 0),
+                [(0f, new Rgba32(17, 19, 24, 255)), (1f, new Rgba32(17, 19, 24, 0))]);
+            canvas.FillPath(new PathBuilder().AddRectangle(new System.Drawing.RectangleF(width - 180, 0, 80, height)).Build(), fade);
+
+            canvas.FillRoundedRectangle(new System.Drawing.RectangleF(20, 24, 90, 24), 12, new Rgba32(37, 99, 235));
+            canvas.DrawLine(new Vector2(20, 76), new Vector2(210, 76), new Rgba32(255, 255, 255, 70), new StrokeStyle { Width = 2 });
+            canvas.DrawArrow(new Vector2(24, 190), new Vector2(150, 130), new Rgba32(255, 90, 90), new StrokeStyle { Width = 4 });
+            canvas.DrawEllipse(new System.Drawing.RectangleF(150, 100, 70, 60), new Rgba32(255, 200, 40), new StrokeStyle { Width = 3, DashPattern = [8f, 5f] });
+
+            var image = canvas.Snapshot();
+            var encoded = await Exporter.EncodeAsync(image, new ImageExportOptions { Format = ImageFormat.Png });
+            _examples.Add(new Example(
+                "Composed with ImageCanvas",
+                "Shapes, gradients, arrows and an image composited together, with no editor component involved.",
+                "using var canvas = ImageCanvas.Create(420, 240, background);\ncanvas.DrawImage(photo, destination);\ncanvas.FillRoundedRectangle(badge, 12, accent);\ncanvas.DrawArrow(from, to, red, stroke);\nvar png = await canvas.ExportAsync();",
+                image, encoded.Length, ++_version));
+        }
+        finally
+        {
+            canvas.Dispose();
+        }
+    }
+
+    private void Clear()
+    {
+        foreach (var example in _examples) example.Image.Dispose();
+        _examples.Clear();
+        _source?.Dispose();
+        _source = null;
+        _exif = null;
+    }
+
+    private static string Format(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
+    };
+
+    private static string Describe(Exception ex) => ex switch
+    {
+        ImageLimitExceededException => "That image is too large to process here.",
+        ImageDecodeException => "That file could not be read as an image.",
+        ImageCapabilityException c => c.Message,
+        _ => ex.Message,
+    };
+
+    public void Dispose() => Clear();
+}

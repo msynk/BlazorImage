@@ -1,0 +1,282 @@
+@using System.Drawing
+@using BlazorImage.Editor.Tools
+@implements IAsyncDisposable
+@inject Interop.BrowserImageInterop Interop
+
+@*
+    The interactive surface: paints the preview into a real canvas element and turns pointer, touch and wheel input
+    into editing gestures. Everything visual is driven by CSS custom properties so hosts can theme it.
+*@
+
+<div class="bi-canvas-host @(Class)"
+     style="@Style"
+     @ref="_hostElement"
+     tabindex="0"
+     role="application"
+     aria-label="@(AriaLabel ?? Strings.CanvasLabel)"
+     aria-describedby="@($"{_id}-hint")"
+     @onkeydown="OnKeyDown"
+     @onkeydown:preventDefault="_preventDefaultKey"
+     @onwheel="OnWheel"
+     @onwheel:preventDefault="true">
+
+    <canvas class="bi-canvas"
+            @ref="_canvasElement"
+            width="@_canvasWidth"
+            height="@_canvasHeight"
+            style="@CanvasStyle"
+            @onpointerdown="OnPointerDown"
+            @onpointermove="OnPointerMove"
+            @onpointerup="OnPointerUp"
+            @onpointercancel="OnPointerUp"
+            @onpointerleave="OnPointerLeave"></canvas>
+
+    @if (ShowCropOverlay && CropRectangle is { } crop)
+    {
+        <div class="bi-crop-overlay" aria-hidden="true">
+            <div class="bi-crop-shade bi-crop-shade-top" style="@ShadeStyle(0, 0, "100%", $"{ToCssY(crop.Top)}px")"></div>
+            <div class="bi-crop-shade" style="@ShadeStyle(0, ToCssY(crop.Top), $"{ToCssX(crop.Left)}px", $"{ToCssY(crop.Height)}px")"></div>
+            <div class="bi-crop-shade" style="@ShadeStyle(ToCssX(crop.Right), ToCssY(crop.Top), $"calc(100% - {ToCssX(crop.Right)}px)", $"{ToCssY(crop.Height)}px")"></div>
+            <div class="bi-crop-shade" style="@ShadeStyle(0, ToCssY(crop.Bottom), "100%", $"calc(100% - {ToCssY(crop.Bottom)}px)")"></div>
+            <div class="bi-crop-frame" style="left:@(ToCssX(crop.Left))px; top:@(ToCssY(crop.Top))px; width:@(ToCssX(crop.Width))px; height:@(ToCssY(crop.Height))px;">
+                @foreach (var handle in CropHandles)
+                {
+                    <span class="bi-crop-handle bi-handle-@handle.ToString().ToLowerInvariant()"
+                          role="button"
+                          tabindex="0"
+                          aria-label="@($"{Strings.CropHandleLabel}: {handle}")"
+                          @onpointerdown="e => OnHandlePointerDown(e, handle)"
+                          @onpointerdown:stopPropagation="true"></span>
+                }
+            </div>
+        </div>
+    }
+
+    @if (SelectionBounds is { } selection && !ShowCropOverlay)
+    {
+        <div class="bi-selection"
+             style="left:@(ToCssX(selection.Left))px; top:@(ToCssY(selection.Top))px; width:@(ToCssX(selection.Width))px; height:@(ToCssY(selection.Height))px;"
+             aria-hidden="true"></div>
+    }
+
+    @if (Busy)
+    {
+        <div class="bi-busy" role="status" aria-live="polite">
+            <span class="bi-spinner" aria-hidden="true"></span>
+            <span class="bi-busy-label">@Strings.Processing</span>
+        </div>
+    }
+
+    <p id="@($"{_id}-hint")" class="bi-visually-hidden">@Strings.KeyboardHint</p>
+</div>
+
+@code {
+    private readonly string _id = $"bi-{Guid.NewGuid():N}";
+    private ElementReference _hostElement;
+    private ElementReference _canvasElement;
+    private DotNetObjectReference<ImageEditorCanvas>? _selfRef;
+    private bool _touchSuppressed;
+    private bool _preventDefaultKey;
+    private int _canvasWidth = 1;
+    private int _canvasHeight = 1;
+    private ImageBuffer? _painted;
+    private long _paintedVersion = -1;
+    private int _activePointerId = -1;
+    private CropHandle? _activeHandle;
+
+    /// <summary>The pixels to display. The component does not take ownership.</summary>
+    [Parameter] public ImageBuffer? Image { get; set; }
+
+    /// <summary>Increment this whenever <see cref="Image"/>'s contents change without the reference changing.</summary>
+    [Parameter] public long Version { get; set; }
+
+    /// <summary>Zoom factor: canvas pixels per image pixel.</summary>
+    [Parameter] public double Zoom { get; set; } = 1.0;
+
+    /// <summary>Pan offset in CSS pixels.</summary>
+    [Parameter] public Vector2 Pan { get; set; }
+
+    /// <summary>Localised strings.</summary>
+    [Parameter] public ImageEditorStrings Strings { get; set; } = ImageEditorStrings.Default;
+
+    /// <summary>Extra CSS classes for the host element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <summary>Inline styles for the host element.</summary>
+    [Parameter] public string? Style { get; set; }
+
+    /// <summary>Accessible label, overriding the localised default.</summary>
+    [Parameter] public string? AriaLabel { get; set; }
+
+    /// <summary>Shows the crop shading and handles.</summary>
+    [Parameter] public bool ShowCropOverlay { get; set; }
+
+    /// <summary>The crop rectangle in image coordinates.</summary>
+    [Parameter] public RectangleF? CropRectangle { get; set; }
+
+    /// <summary>Bounds of the selected annotation, in image coordinates.</summary>
+    [Parameter] public RectangleF? SelectionBounds { get; set; }
+
+    /// <summary>Shows a busy indicator over the canvas.</summary>
+    [Parameter] public bool Busy { get; set; }
+
+    /// <summary>Raised when a drag starts, with the point in image coordinates.</summary>
+    [Parameter] public EventCallback<CanvasPointerArgs> OnDragStart { get; set; }
+
+    /// <summary>Raised as a drag moves.</summary>
+    [Parameter] public EventCallback<CanvasPointerArgs> OnDragMove { get; set; }
+
+    /// <summary>Raised when a drag ends.</summary>
+    [Parameter] public EventCallback<CanvasPointerArgs> OnDragEnd { get; set; }
+
+    /// <summary>Raised when a crop handle drag starts.</summary>
+    [Parameter] public EventCallback<CropHandleArgs> OnCropHandleDown { get; set; }
+
+    /// <summary>Raised on a wheel or pinch zoom, with the multiplier and the focal point in image coordinates.</summary>
+    [Parameter] public EventCallback<ZoomArgs> OnZoom { get; set; }
+
+    /// <summary>Raised for keys the canvas does not handle itself.</summary>
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyPressed { get; set; }
+
+    private static readonly CropHandle[] CropHandles =
+    [
+        CropHandle.TopLeft, CropHandle.Top, CropHandle.TopRight,
+        CropHandle.Left, CropHandle.Right,
+        CropHandle.BottomLeft, CropHandle.Bottom, CropHandle.BottomRight,
+    ];
+
+    private string CanvasStyle => Image is null
+        ? "display:none"
+        : $"width:{Image.Width * Zoom:0.##}px; height:{Image.Height * Zoom:0.##}px; transform:translate({Pan.X:0.##}px,{Pan.Y:0.##}px);";
+
+    private double ToCssX(double imageX) => imageX * Zoom + Pan.X;
+    private double ToCssY(double imageY) => imageY * Zoom + Pan.Y;
+
+    private static string ShadeStyle(double left, double top, string width, string height)
+        => $"left:{left}px; top:{top}px; width:{width}; height:{height};";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try
+            {
+                // Registered from JS because Blazor cannot attach a non-passive touch listener, which is required to
+                // stop the page scrolling while the user draws.
+                await Interop.InvokeVoidAsync("suppressTouchScrolling", CancellationToken.None, _hostElement);
+                _touchSuppressed = true;
+            }
+            catch (ImageCapabilityException)
+            {
+                // Prerendering or a missing module: the editor still works, the page may scroll on touch.
+            }
+        }
+        await PaintAsync();
+    }
+
+    /// <summary>Repaints the canvas when the image or its version changed.</summary>
+    private async Task PaintAsync()
+    {
+        if (Image is null || Image.IsDisposed) return;
+        if (ReferenceEquals(_painted, Image) && _paintedVersion == Version) return;
+        _canvasWidth = Image.Width;
+        _canvasHeight = Image.Height;
+        try
+        {
+            await Interop.InvokeVoidAsync("paint", CancellationToken.None, _canvasElement, Image.ToArray(), Image.Width, Image.Height);
+            _painted = Image;
+            _paintedVersion = Version;
+        }
+        catch (ImageCapabilityException) { /* not interactive yet */ }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit closed */ }
+    }
+
+    private Vector2 ToImagePoint(double clientX, double clientY, double offsetX, double offsetY)
+    {
+        // offsetX/Y are relative to the canvas element, which is already scaled by Zoom.
+        var x = offsetX / Zoom;
+        var y = offsetY / Zoom;
+        return new Vector2((float)x, (float)y);
+    }
+
+    private async Task OnPointerDown(PointerEventArgs e)
+    {
+        if (Image is null || _activePointerId >= 0) return;
+        _activePointerId = (int)e.PointerId;
+        await Interop.InvokeVoidAsync("setPointerCapture", CancellationToken.None, _canvasElement, e.PointerId);
+        await OnDragStart.InvokeAsync(BuildArgs(e));
+    }
+
+    private async Task OnPointerMove(PointerEventArgs e)
+    {
+        if (Image is null || _activePointerId != (int)e.PointerId) return;
+        await OnDragMove.InvokeAsync(BuildArgs(e));
+    }
+
+    private async Task OnPointerUp(PointerEventArgs e)
+    {
+        if (Image is null || _activePointerId != (int)e.PointerId) return;
+        _activePointerId = -1;
+        _activeHandle = null;
+        await Interop.InvokeVoidAsync("releasePointerCapture", CancellationToken.None, _canvasElement, e.PointerId);
+        await OnDragEnd.InvokeAsync(BuildArgs(e));
+    }
+
+    private async Task OnPointerLeave(PointerEventArgs e)
+    {
+        // Pointer capture keeps the drag alive; nothing to do unless capture was refused.
+        if (_activePointerId == (int)e.PointerId && e.Buttons == 0) await OnPointerUp(e);
+    }
+
+    private async Task OnHandlePointerDown(PointerEventArgs e, CropHandle handle)
+    {
+        _activeHandle = handle;
+        _activePointerId = (int)e.PointerId;
+        await OnCropHandleDown.InvokeAsync(new CropHandleArgs(handle, BuildArgs(e)));
+    }
+
+    private CanvasPointerArgs BuildArgs(PointerEventArgs e) => new(
+        ToImagePoint(e.ClientX, e.ClientY, e.OffsetX, e.OffsetY),
+        e.ShiftKey,
+        e.AltKey,
+        e.CtrlKey,
+        e.PointerType ?? "mouse",
+        (float)e.Pressure,
+        _activeHandle);
+
+    private async Task OnWheel(WheelEventArgs e)
+    {
+        if (Image is null) return;
+        // Ctrl+wheel is the conventional zoom gesture and is also what a trackpad pinch produces.
+        var factor = e.DeltaY < 0 ? 1.1 : 1 / 1.1;
+        var focal = ToImagePoint(e.ClientX, e.ClientY, e.OffsetX, e.OffsetY);
+        await OnZoom.InvokeAsync(new ZoomArgs(factor, focal));
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        // Arrow keys and Delete are handled by the host; swallow them so the page does not scroll.
+        _preventDefaultKey = e.Key is "ArrowLeft" or "ArrowRight" or "ArrowUp" or "ArrowDown" or "Delete" or "Backspace" or " ";
+        await OnKeyPressed.InvokeAsync(e);
+    }
+
+    /// <summary>Moves keyboard focus to the canvas so shortcuts work.</summary>
+    public ValueTask FocusAsync() => _hostElement.FocusAsync();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_touchSuppressed)
+        {
+            try
+            {
+                await Interop.InvokeVoidAsync("restoreTouchScrolling", CancellationToken.None, _hostElement);
+            }
+            catch (Exception ex) when (ex is Microsoft.JSInterop.JSDisconnectedException or Microsoft.JSInterop.JSException or ImageCapabilityException or ObjectDisposedException)
+            {
+                // The page is going away; nothing to restore.
+            }
+        }
+        _selfRef?.Dispose();
+    }
+}

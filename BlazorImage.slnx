@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/BlazorImage.Demo/BlazorImage.Demo.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BlazorImage.Blazor/BlazorImage.Blazor.csproj" />
+    <Project Path="src/BlazorImage.Core/BlazorImage.Core.csproj" />
+    <Project Path="src/BlazorImage.Editor/BlazorImage.Editor.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BlazorImage.Benchmarks/BlazorImage.Benchmarks.csproj" />
+    <Project Path="tests/BlazorImage.Browser.Tests/BlazorImage.Browser.Tests.csproj" />
+    <Project Path="tests/BlazorImage.Core.Tests/BlazorImage.Core.Tests.csproj" />
+  </Folder>
+</Solution>

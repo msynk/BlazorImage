@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>BlazorImage</RootNamespace>
+    <AssemblyName>BlazorImage.Core</AssemblyName>
+    <PackageId>BlazorImage.Core</PackageId>
+    <Description>Browser-independent image processing engine for .NET: pixel buffers, transforms, adjustments, filters, drawing, annotations, EXIF metadata, managed PNG/JPEG/BMP codecs and composable non-destructive pipelines.</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BlazorImage.Core.Tests" />
+    <InternalsVisibleTo Include="BlazorImage.Blazor" />
+    <InternalsVisibleTo Include="BlazorImage.Editor" />
+    <InternalsVisibleTo Include="BlazorImage.Benchmarks" />
+  </ItemGroup>
+</Project>

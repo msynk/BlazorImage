@@ -1,0 +1,117 @@
+@page "/capabilities"
+@inject IImageCapabilityProvider Provider
+
+<PageTitle>Capabilities — BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>Browser capabilities</h1>
+    <p class="lede">
+        Every one of these is measured, not guessed. Format support is confirmed by actually encoding a pixel and
+        checking what came back, and the canvas limit is found by allocating until the browser refuses.
+    </p>
+</div>
+
+@if (_capabilities is null)
+{
+    <div class="card">Probing this browser…</div>
+}
+else
+{
+    <div class="grid">
+        <div class="card">
+            <p class="card-title">Environment</p>
+            <table class="data">
+                <tbody>
+                    <tr><th scope="row">Runtime</th><td>@_capabilities.Environment</td></tr>
+                    <tr><th scope="row">Device pixel ratio</th><td class="num">@_capabilities.DevicePixelRatio.ToString("0.##")</td></tr>
+                    <tr><th scope="row">Logical processors</th><td class="num">@(_capabilities.HardwareConcurrency?.ToString() ?? "unknown")</td></tr>
+                    <tr><th scope="row">Device memory</th><td class="num">@(_capabilities.DeviceMemoryGb is { } gb ? $"{gb:0.#} GB" : "unknown")</td></tr>
+                    <tr><th scope="row">Max canvas edge</th><td class="num">@_capabilities.MaxCanvasDimension px</td></tr>
+                    <tr><th scope="row">Suggested working size</th><td class="num">@_capabilities.SuggestedMaxWorkingDimension px</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <p class="card-title">Formats</p>
+            <table class="data">
+                <thead>
+                    <tr><th scope="col">Format</th><th scope="col">Decode</th><th scope="col">Encode</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var format in Formats)
+                    {
+                        <tr>
+                            <th scope="row">@format.ToString().ToUpperInvariant()</th>
+                            <td>@Badge(_capabilities.CanDecode(format))</td>
+                            <td>@Badge(_capabilities.CanEncode(format))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <p class="card-title">Platform features</p>
+            <table class="data">
+                <tbody>
+                    @foreach (var (label, value) in Features)
+                    {
+                        <tr><th scope="row">@label</th><td>@Badge(value)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <p class="card-title">Choosing a format from this</p>
+        <pre class="code">@Snippet</pre>
+        <p class="small muted" style="margin-bottom:0">
+            On this browser that resolves to
+            <strong>@_capabilities.ChooseEncodableFormat([ImageFormat.Avif, ImageFormat.WebP, ImageFormat.Jpeg]).ToString().ToUpperInvariant()</strong>.
+        </p>
+    </div>
+}
+
+@code {
+    private ImageCapabilities? _capabilities;
+
+    private static readonly ImageFormat[] Formats =
+    [
+        ImageFormat.Png, ImageFormat.Jpeg, ImageFormat.WebP, ImageFormat.Avif, ImageFormat.Gif, ImageFormat.Bmp,
+    ];
+
+    private const string Snippet = """
+        var caps = await capabilities.GetAsync();
+
+        // Never assume: pick the best format this browser can actually write.
+        var format = caps.ChooseEncodableFormat(
+            [ImageFormat.Avif, ImageFormat.WebP, ImageFormat.Jpeg]);
+        """;
+
+    private (string Label, bool Value)[] Features => _capabilities is null ? [] :
+    [
+        ("OffscreenCanvas", _capabilities.SupportsOffscreenCanvas),
+        ("Web Workers", _capabilities.SupportsWebWorkers),
+        ("createImageBitmap", _capabilities.SupportsImageBitmap),
+        ("WebCodecs ImageDecoder", _capabilities.SupportsWebCodecs),
+        ("Clipboard read", _capabilities.SupportsClipboardRead),
+        ("Clipboard write", _capabilities.SupportsClipboardWrite),
+        ("File System Access", _capabilities.SupportsFileSystemAccess),
+        ("Camera capture", _capabilities.SupportsCamera),
+        ("WebAssembly SIMD", _capabilities.SupportsWasmSimd),
+        ("WebAssembly threads", _capabilities.SupportsWasmThreads),
+    ];
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Capability probing needs a live browser, so it runs after the first render rather than during initialisation.
+        if (!firstRender) return;
+        _capabilities = await Provider.GetAsync();
+        StateHasChanged();
+    }
+
+    private static MarkupString Badge(bool value)
+        => new(value ? "<span class=\"badge badge-yes\">yes</span>" : "<span class=\"badge badge-no\">no</span>");
+}

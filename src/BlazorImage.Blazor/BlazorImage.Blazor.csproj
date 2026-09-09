@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>BlazorImage</RootNamespace>
+    <AssemblyName>BlazorImage.Blazor</AssemblyName>
+    <PackageId>BlazorImage.Blazor</PackageId>
+    <Description>Blazor integration for BlazorImage: browser-native image decoding and encoding (WebP, AVIF), capability detection, IBrowserFile/clipboard/camera input and dependency injection wiring. Works in WebAssembly, Server and Auto render modes.</Description>
+    <AddRazorSupportForMvc>false</AddRazorSupportForMvc>
+    <StaticWebAssetBasePath Condition="'$(StaticWebAssetBasePath)' == ''">_content/BlazorImage.Blazor</StaticWebAssetBasePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BlazorImage.Core/BlazorImage.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BlazorImage.Editor" />
+    <InternalsVisibleTo Include="BlazorImage.Browser.Tests" />
+  </ItemGroup>
+</Project>

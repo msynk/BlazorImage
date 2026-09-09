@@ -1,0 +1,85 @@
+@page "/"
+
+<PageTitle>BlazorImage</PageTitle>
+
+<div class="page-header">
+    <h1>Browser-side image processing for Blazor</h1>
+    <p class="lede">
+        Load, transform, annotate and export images entirely in the browser, from strongly typed C#.
+        No server round trips, no base64, no JavaScript image library.
+    </p>
+</div>
+
+<div class="card">
+    <p class="card-title">The whole idea</p>
+    <pre class="code">@Snippet</pre>
+    <p class="small muted" style="margin-top:12px; margin-bottom:0">
+        That pipeline runs on the user's device. The original file never leaves the browser, EXIF orientation is applied,
+        GPS coordinates are stripped, and the result is a WebP the size you asked for.
+    </p>
+</div>
+
+<h2 style="margin-top:28px">Workflows</h2>
+<div class="grid">
+    @foreach (var demo in Demos)
+    {
+        <a class="card" href="@demo.Href" style="text-decoration:none; color:inherit; display:block">
+            <p class="card-title">@demo.Tag</p>
+            <h3 style="margin-bottom:6px">@demo.Title</h3>
+            <p class="small muted" style="margin:0">@demo.Description</p>
+        </a>
+    }
+</div>
+
+<h2 style="margin-top:28px">What makes it different</h2>
+<div class="grid">
+    @foreach (var point in Points)
+    {
+        <div class="card">
+            <h3>@point.Title</h3>
+            <p class="small muted" style="margin:0">@point.Body</p>
+        </div>
+    }
+</div>
+
+@code {
+    private const string Snippet = """
+        var result = await processor.ProcessAsync(
+            file,
+            ImagePipeline.Create()
+                .AutoOrient()
+                .Cover(512, 512)
+                .Sharpen(0.3f)
+                .Vibrance(0.15f),
+            new ImageExportOptions
+            {
+                Format   = ImageFormat.WebP,
+                Quality  = 0.82,
+                Metadata = MetadataPolicy.StripSensitive,
+                MaxFileSize = 120 * 1024,
+            });
+        """;
+
+    private static readonly (string Href, string Tag, string Title, string Description)[] Demos =
+    [
+        ("avatar", "Profile pictures", "Avatar editor", "Crop to a circle, resize, compress to a size budget and export WebP with a JPEG fallback."),
+        ("annotate", "Bug reports", "Screenshot annotation", "Paste a screenshot, add arrows, numbered steps and text, then blur or black out the parts that must not be shared."),
+        ("optimize", "Upload pipeline", "Image optimisation", "Drop a folder of photos, cap their dimensions and re-encode them. See exactly how many bytes you saved."),
+        ("product", "Ecommerce", "Product images", "Produce every size a catalogue needs from one upload, in one pass, with a consistent background."),
+        ("social", "Marketing", "Social image editor", "Compose to a platform's exact canvas, apply a look, and add a caption."),
+        ("batch", "Bulk work", "Batch processor", "Run one pipeline over many files with bounded concurrency, live progress and per-file errors."),
+        ("editor", "Everything", "Full editor", "The complete editor component: crop, adjust, filter, draw, annotate, undo and export."),
+        ("headless", "No UI", "Headless API", "The same engine with no components at all, for upload preprocessing and thumbnails."),
+        ("capabilities", "Environment", "Capabilities", "What this browser can actually decode, encode and render, probed rather than guessed."),
+    ];
+
+    private static readonly (string Title, string Body)[] Points =
+    [
+        ("Non-destructive by construction", "An edit is a list of operations, not a mutated buffer. Undo costs a few hundred bytes, previews are cheap, and any past step can be changed."),
+        ("Real pixels, real C#", "The resampler, rasteriser, colour engine and PNG, JPEG, BMP and GIF codecs are implemented here. The browser is used for what only it can do: WebP and AVIF."),
+        ("Large images stay usable", "Editing runs on a proxy sized for the display and replays at full resolution on export, so a 24 megapixel photo does not stall the UI."),
+        ("Privacy is the default", "Metadata is removed unless you ask for it. GPS coordinates never leak into an exported avatar by accident."),
+        ("Nothing is assumed about the browser", "Format support is probed by encoding a pixel. When AVIF is unavailable you are told, not silently handed a PNG."),
+        ("Headless first", "Every capability works without the editor component, so the same pipeline runs in an upload handler or a console tool."),
+    ];
+}

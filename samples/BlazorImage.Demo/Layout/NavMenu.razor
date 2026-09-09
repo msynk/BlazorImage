@@ -1,0 +1,45 @@
+<header class="app-nav">
+    <a class="app-brand" href="">
+        <span class="app-brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="8.5" cy="9.5" r="1.5" />
+                <path d="m21 15-5-5L5 20" />
+            </svg>
+        </span>
+        <span class="app-brand-text">BlazorImage</span>
+    </a>
+
+    <button class="app-nav-toggle" type="button" aria-expanded="@_open" aria-controls="app-nav-links"
+            aria-label="Toggle navigation" @onclick="() => _open = !_open">
+        <span aria-hidden="true">☰</span>
+    </button>
+
+    <nav id="app-nav-links" class="app-nav-links @(_open ? "app-nav-open" : null)" aria-label="Demos">
+        @foreach (var link in Links)
+        {
+            <NavLink class="app-nav-link" href="@link.Href" Match="@(link.Href == "" ? NavLinkMatch.All : NavLinkMatch.Prefix)"
+                     @onclick="() => _open = false">
+                @link.Label
+            </NavLink>
+        }
+    </nav>
+</header>
+
+@code {
+    private bool _open;
+
+    private static readonly (string Href, string Label)[] Links =
+    [
+        ("", "Overview"),
+        ("avatar", "Avatar"),
+        ("annotate", "Screenshot"),
+        ("optimize", "Optimise"),
+        ("product", "Product"),
+        ("social", "Social"),
+        ("batch", "Batch"),
+        ("editor", "Full editor"),
+        ("headless", "Headless API"),
+        ("capabilities", "Capabilities"),
+    ];
+}
