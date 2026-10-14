@@ -10,7 +10,7 @@
         <span class="app-brand-text">BlazorImage</span>
     </a>
 
-    <button class="app-nav-toggle" type="button" aria-expanded="@_open" aria-controls="app-nav-links"
+    <button class="app-nav-toggle" type="button" aria-expanded="@(_open ? "true" : "false")" aria-controls="app-nav-links"
             aria-label="Toggle navigation" @onclick="() => _open = !_open">
         <span aria-hidden="true">☰</span>
     </button>

@@ -9,7 +9,9 @@
      @ondragover="OnDragOver"
      @ondragover:preventDefault="true"
      @ondragleave="OnDragLeave"
-     @ondrop:preventDefault="true">
+     @ondrop="OnDrop">
+    @* The drop must not be cancelled: the transparent file input covering the zone receives the dropped files
+       through the browser's default action, and reports them through its change event. *@
 
     <InputFile OnChange="OnChange"
                accept="@Accept"
@@ -79,6 +81,12 @@
     {
         _dragDepth = Math.Max(0, _dragDepth - 1);
         if (_dragDepth == 0) _dragOver = false;
+    }
+
+    private void OnDrop()
+    {
+        _dragOver = false;
+        _dragDepth = 0;
     }
 
     private async Task OnChange(InputFileChangeEventArgs e)

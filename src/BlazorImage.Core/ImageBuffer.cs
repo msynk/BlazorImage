@@ -165,7 +165,9 @@ public sealed class ImageBuffer : IDisposable
     /// <summary>Creates an independent copy of this buffer including metadata.</summary>
     public ImageBuffer Clone(IPixelAllocator? allocator = null)
     {
-        var copy = Create(Width, Height, allocator, clear: false);
+        // This buffer already exists, so whatever limits it was created under were met; re-checking against the
+        // defaults would refuse to copy an image that was deliberately allowed past them.
+        var copy = Create(Width, Height, allocator, clear: false, ImageLimits.Unrestricted);
         Bytes.CopyTo(copy.Bytes);
         copy.Metadata = Metadata;
         return copy;
@@ -176,7 +178,7 @@ public sealed class ImageBuffer : IDisposable
     {
         rect.Intersect(Bounds);
         if (rect.IsEmptyArea()) throw new ArgumentException("Region does not intersect the image.", nameof(rect));
-        var copy = Create(rect.Width, rect.Height, allocator, clear: false);
+        var copy = Create(rect.Width, rect.Height, allocator, clear: false, ImageLimits.Unrestricted);
         for (var y = 0; y < rect.Height; y++)
             GetRow(rect.Y + y).Slice(rect.X, rect.Width).CopyTo(copy.GetRow(y));
         copy.Metadata = Metadata;

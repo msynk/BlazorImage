@@ -19,6 +19,7 @@ public sealed class EditHistory
 {
     private readonly List<HistoryEntry> _entries = [];
     private int _position = -1;
+    private bool _transientOpen;
 
     /// <summary>Creates a history whose initial state is <paramref name="initial"/>.</summary>
     public EditHistory(ImageDocument initial, int maxDepth = 100, string label = "Original")
@@ -51,6 +52,11 @@ public sealed class EditHistory
     /// <summary>True when <see cref="Redo"/> would change the state.</summary>
     public bool CanRedo => _position < _entries.Count - 1;
 
+    /// <summary>
+    /// True while the current entry was opened by <see cref="PushTransient"/> and has not been committed yet.
+    /// </summary>
+    public bool IsTransientOpen => _transientOpen && _position == _entries.Count - 1;
+
     /// <summary>Approximate memory held by the history, in bytes.</summary>
     public long EstimatedMemory => _entries.Sum(e => (long)e.EstimatedSize);
 
@@ -64,9 +70,11 @@ public sealed class EditHistory
     public void Push(ImageDocument document, string label)
     {
         ArgumentNullException.ThrowIfNull(document);
+        _transientOpen = false;
         if (_position < _entries.Count - 1) _entries.RemoveRange(_position + 1, _entries.Count - _position - 1);
         _entries.Add(new HistoryEntry(document, label, DateTimeOffset.UtcNow));
-        if (_entries.Count > MaxDepth) _entries.RemoveAt(1); // keep the original at index 0
+        // Keep the original at index 0, and never trim the entry just added: with a depth of 1 that would lose the edit.
+        if (_entries.Count > Math.Max(2, MaxDepth)) _entries.RemoveAt(1);
         _position = _entries.Count - 1;
         Changed?.Invoke(Current);
     }
@@ -88,11 +96,45 @@ public sealed class EditHistory
         Changed?.Invoke(Current);
     }
 
+    /// <summary>
+    /// Records a state that is still being dragged. The first call of an interaction adds a new entry, so the state
+    /// before the interaction stays reachable by undo; later calls replace that entry. Finish the interaction with
+    /// <see cref="CommitTransient"/>, or with <see cref="Push"/>, which starts a new entry after it.
+    /// </summary>
+    public void PushTransient(ImageDocument document, string label)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (IsTransientOpen)
+        {
+            _entries[_position] = _entries[_position] with { Document = document };
+            Changed?.Invoke(Current);
+            return;
+        }
+        Push(document, label);
+        _transientOpen = true;
+    }
+
+    /// <summary>
+    /// Finishes the interaction opened by <see cref="PushTransient"/>, storing its final state under
+    /// <paramref name="label"/>. Returns false, changing nothing, when no transient entry is open.
+    /// </summary>
+    public bool CommitTransient(ImageDocument document, string label)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!IsTransientOpen) return false;
+        _transientOpen = false;
+        var changed = !ReferenceEquals(document, Current);
+        _entries[_position] = _entries[_position] with { Document = document, Label = label };
+        if (changed) Changed?.Invoke(Current);
+        return true;
+    }
+
     /// <summary>Steps back one entry. Returns the new current document.</summary>
     public ImageDocument Undo()
     {
         if (CanUndo)
         {
+            _transientOpen = false;
             _position--;
             Changed?.Invoke(Current);
         }
@@ -104,6 +146,7 @@ public sealed class EditHistory
     {
         if (CanRedo)
         {
+            _transientOpen = false;
             _position++;
             Changed?.Invoke(Current);
         }
@@ -116,6 +159,7 @@ public sealed class EditHistory
         if (index < 0 || index >= _entries.Count) throw new ArgumentOutOfRangeException(nameof(index));
         if (index != _position)
         {
+            _transientOpen = false;
             _position = index;
             Changed?.Invoke(Current);
         }
@@ -129,6 +173,7 @@ public sealed class EditHistory
     public void Clear(ImageDocument document, string label = "Original")
     {
         ArgumentNullException.ThrowIfNull(document);
+        _transientOpen = false;
         _entries.Clear();
         _entries.Add(new HistoryEntry(document, label, DateTimeOffset.UtcNow));
         _position = 0;

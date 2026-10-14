@@ -175,7 +175,7 @@ public static class PngContainer
         while (pos + 12 <= png.Length)
         {
             var len = BinaryPrimitives.ReadUInt32BigEndian(png[pos..]);
-            if (len > int.MaxValue - 12 || pos + 12 + (int)len > png.Length) break;
+            if ((long)pos + 12 + len > png.Length) break; // in long: a crafted length near int.MaxValue would wrap
             var type = BinaryPrimitives.ReadUInt32BigEndian(png[(pos + 4)..]);
             list.Add(new Chunk(type, pos, pos + 8, (int)len));
             pos += 12 + (int)len;
@@ -295,7 +295,7 @@ public static class WebPContainer
         {
             var fourcc = Encoding.ASCII.GetString(webp.Slice(pos, 4));
             var len = BinaryPrimitives.ReadUInt32LittleEndian(webp[(pos + 4)..]);
-            if (len > int.MaxValue - 8 || pos + 8 + (int)len > webp.Length) break;
+            if ((long)pos + 8 + len > webp.Length) break; // in long: a crafted length near int.MaxValue would wrap
             list.Add(new Chunk(fourcc, pos, pos + 8, (int)len));
             pos += 8 + (int)len + ((int)len & 1);
         }

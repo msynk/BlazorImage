@@ -92,7 +92,7 @@ public sealed record LineAnnotation : Annotation
     public override Annotation ForScale(double scale) => scale == 1 ? this : this with { Start = Start * (float)scale, End = End * (float)scale, Style = Style.ForScale(scale) };
 
     public override bool HitTest(Vector2 point, float tolerance = 4f)
-        => DistanceToSegment(point, Start, End) <= tolerance + Style.Stroke.Width / 2;
+        => DistanceToSegment(ToLocal(point), Start, End) <= tolerance + Style.Stroke.Width / 2;
 
     internal static float DistanceToSegment(Vector2 p, Vector2 a, Vector2 b)
     {
@@ -135,7 +135,7 @@ public sealed record ArrowAnnotation : Annotation
     public override Annotation ForScale(double scale) => scale == 1 ? this : this with { Start = Start * (float)scale, End = End * (float)scale, Style = Style.ForScale(scale) };
 
     public override bool HitTest(Vector2 point, float tolerance = 4f)
-        => LineAnnotation.DistanceToSegment(point, Start, End) <= tolerance + Style.Stroke.Width;
+        => LineAnnotation.DistanceToSegment(ToLocal(point), Start, End) <= tolerance + Style.Stroke.Width;
 }
 
 /// <summary>A freehand stroke captured from pointer input.</summary>
@@ -225,6 +225,7 @@ public sealed record FreehandAnnotation : Annotation
     public override bool HitTest(Vector2 point, float tolerance = 4f)
     {
         var limit = tolerance + Style.Stroke.Width / 2;
+        point = ToLocal(point);
         for (var i = 0; i + 1 < _points.Length; i++)
             if (LineAnnotation.DistanceToSegment(point, _points[i], _points[i + 1]) <= limit) return true;
         return _points.Length == 1 && Vector2.Distance(point, _points[0]) <= limit;
@@ -411,21 +412,63 @@ public sealed record RedactionAnnotation : Annotation
     public override void Render(ImageCanvas canvas, AnnotationRenderContext context)
     {
         var area = Rectangle;
-        var device = System.Drawing.Rectangle.Round(area);
+        if (Mode is not (RedactionMode.Pixelate or RedactionMode.Blur))
+        {
+            canvas.FillRectangle(area, Color);
+            return;
+        }
+
+        // The filters work on device pixels, so the region the user sees (after the canvas transform, which carries
+        // this annotation's rotation) is mapped there first. Rounding outwards means a partly covered pixel is
+        // redacted rather than left readable.
+        var outline = new PathBuilder().AddRectangle(area).Build().Transform(canvas.Transform);
+        var bounds = outline.Bounds;
+        if (!float.IsFinite(bounds.Left) || !float.IsFinite(bounds.Top) || !float.IsFinite(bounds.Right) || !float.IsFinite(bounds.Bottom)) return;
+        var device = System.Drawing.Rectangle.FromLTRB(
+            (int)MathF.Floor(bounds.Left), (int)MathF.Floor(bounds.Top), (int)MathF.Ceiling(bounds.Right), (int)MathF.Ceiling(bounds.Bottom));
+        device.Intersect(canvas.Clip);
         device.Intersect(canvas.Buffer.Bounds);
         if (device.IsEmptyArea()) return;
-        switch (Mode)
+
+        var transform = canvas.Transform;
+        var axisAligned = transform.M12 == 0 && transform.M21 == 0;
+        if (axisAligned)
         {
-            case RedactionMode.Pixelate:
-                new PixelateFilter(Math.Max(2, (int)Strength), device).Apply(canvas.Buffer, new Operations.OperationContext(canMutateSource: true));
-                break;
-            case RedactionMode.Blur:
-                new BlurFilter(Math.Max(1f, Strength), device).Apply(canvas.Buffer, new Operations.OperationContext(canMutateSource: true));
-                break;
-            default:
-                canvas.FillRectangle(area, Color);
-                break;
+            Redact(canvas.Buffer, device);
+            return;
         }
+
+        // Rotated: filter the bounding box on a copy, then blend it back only inside the rotated outline.
+        using var filtered = canvas.Buffer.CopyRegion(device);
+        Redact(filtered, new System.Drawing.Rectangle(System.Drawing.Point.Empty, filtered.Size));
+        var target = canvas.Buffer;
+        Rasterizer.Rasterize(outline, device, FillRule.NonZero, (y, x0, coverage) =>
+        {
+            var row = target.GetRow(y);
+            var source = filtered.GetRow(y - device.Y);
+            for (var i = 0; i < coverage.Length; i++)
+            {
+                var a = Math.Min(1f, coverage[i]);
+                if (a <= 0) continue;
+                var x = x0 + i;
+                row[x] = a >= 0.999f ? source[x - device.X] : Lerp(row[x], source[x - device.X], a);
+            }
+        });
+    }
+
+    private static Rgba32 Lerp(Rgba32 from, Rgba32 to, float t) => new(
+        (byte)MathF.Round(from.R + (to.R - from.R) * t),
+        (byte)MathF.Round(from.G + (to.G - from.G) * t),
+        (byte)MathF.Round(from.B + (to.B - from.B) * t),
+        (byte)MathF.Round(from.A + (to.A - from.A) * t));
+
+    /// <summary>Pixelates or blurs a region of a buffer in place.</summary>
+    private void Redact(ImageBuffer buffer, System.Drawing.Rectangle region)
+    {
+        Operations.IImageOperation filter = Mode == RedactionMode.Pixelate
+            ? new PixelateFilter(Math.Max(2, (int)Strength), region)
+            : new BlurFilter(Math.Max(1f, Strength), region);
+        filter.Apply(buffer, new Operations.OperationContext(canMutateSource: true));
     }
 
     public override Annotation Translate(float dx, float dy) => this with { Rectangle = RectangleAnnotation.Offset(Rectangle, dx, dy) };

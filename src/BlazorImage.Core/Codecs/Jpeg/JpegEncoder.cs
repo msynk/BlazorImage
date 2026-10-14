@@ -189,6 +189,9 @@ internal sealed class JpegWriter
 
     private void WriteSof(int w, int h)
     {
+        // The frame header stores 16-bit dimensions; a larger value would be silently truncated into a corrupt file.
+        if (w > ushort.MaxValue || h > ushort.MaxValue)
+            throw new ImageEncodeException($"JPEG cannot store an image of {w}x{h}; each dimension must be at most {ushort.MaxValue}.");
         Span<byte> p = stackalloc byte[15];
         p[0] = 8;
         BinaryPrimitives.WriteUInt16BigEndian(p[1..], (ushort)h);

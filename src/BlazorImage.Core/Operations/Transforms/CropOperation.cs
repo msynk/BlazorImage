@@ -94,8 +94,11 @@ public sealed class CropOperation : ImageOperation, IGeometricOperation
     public CropOperation? TryThen(CropOperation next)
     {
         ArgumentNullException.ThrowIfNull(next);
+        // At run time the first crop is clipped to the image, so the second is relative to the clipped origin. A
+        // negative origin clips to zero whatever the image size; the far edges need no such care, because clipping
+        // the merged rectangle to the image at run time gives the same result.
         var r = next.Rectangle;
-        r.Offset(Rectangle.Location);
+        r.Offset(Math.Max(0, Rectangle.X), Math.Max(0, Rectangle.Y));
         r.Intersect(Rectangle);
         return r.IsEmptyArea() ? null : new CropOperation(r);
     }

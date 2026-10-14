@@ -47,10 +47,12 @@ public static class Rasterizer
         if (edges.Count == 0) return;
 
         var bounds = path.Bounds;
-        var top = Math.Max(clip.Top, (int)Math.Floor(bounds.Top));
-        var bottom = Math.Min(clip.Bottom, (int)Math.Ceiling(bounds.Bottom) + 1);
-        var left = Math.Max(clip.Left, (int)Math.Floor(bounds.Left));
-        var right = Math.Min(clip.Right, (int)Math.Ceiling(bounds.Right) + 1);
+        // Clamp in double before converting: a huge or infinite coordinate would otherwise overflow int and wrap,
+        // making the range empty and the whole shape vanish.
+        var top = (int)Math.Max(clip.Top, Math.Floor((double)bounds.Top));
+        var bottom = (int)Math.Min(clip.Bottom, Math.Ceiling((double)bounds.Bottom) + 1);
+        var left = (int)Math.Max(clip.Left, Math.Floor((double)bounds.Left));
+        var right = (int)Math.Min(clip.Right, Math.Ceiling((double)bounds.Right) + 1);
         if (top >= bottom || left >= right) return;
 
         // Sort edges by their top, so a scanline only has to consider the ones that are actually open. Without this,
@@ -156,6 +158,8 @@ public static class Rasterizer
 
     private static void AddEdge(List<Edge> edges, Vector2 a, Vector2 b)
     {
+        // A non-finite coordinate cannot be rasterised: NaN breaks the edge sort and the span arithmetic.
+        if (!float.IsFinite(a.X) || !float.IsFinite(a.Y) || !float.IsFinite(b.X) || !float.IsFinite(b.Y)) return;
         if (Math.Abs(a.Y - b.Y) < 1e-9f) return; // horizontal edges contribute nothing
         if (a.Y < b.Y) edges.Add(new Edge(a.X, a.Y, b.X, b.Y, 1));
         else edges.Add(new Edge(b.X, b.Y, a.X, a.Y, -1));

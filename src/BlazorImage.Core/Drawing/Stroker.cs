@@ -82,7 +82,7 @@ public static class Stroker
 
         for (var c = 0; c < path.Contours.Count; c++)
         {
-            var points = Dedupe(path.Contours[c]);
+            var points = Dedupe(path.Contours[c], path.Closed[c]);
             if (points.Count < 2)
             {
                 // A degenerate contour still paints a dot for round or square caps.
@@ -104,12 +104,14 @@ public static class Stroker
         return builder.Build();
     }
 
-    private static List<Vector2> Dedupe(Vector2[] points)
+    private static List<Vector2> Dedupe(Vector2[] points, bool closed)
     {
         var result = new List<Vector2>(points.Length);
         foreach (var p in points)
             if (result.Count == 0 || Vector2.DistanceSquared(result[^1], p) > 1e-10f) result.Add(p);
-        if (result.Count > 2 && Vector2.DistanceSquared(result[0], result[^1]) <= 1e-10f) result.RemoveAt(result.Count - 1);
+        // A closed contour that repeats its start point would otherwise get a zero-length closing segment. An open one
+        // that returns to its start still needs that final segment drawn.
+        if (closed && result.Count > 2 && Vector2.DistanceSquared(result[0], result[^1]) <= 1e-10f) result.RemoveAt(result.Count - 1);
         return result;
     }
 
@@ -170,7 +172,11 @@ public static class Stroker
         switch (style.Join)
         {
             case LineJoin.Round:
-                builder.AddEllipse(new System.Drawing.RectangleF(cur.X - half, cur.Y - half, half * 2, half * 2));
+                // Wound the same way as the segment quads. AddEllipse winds the opposite way, which under the non-zero
+                // rule cancels the quads wherever the two overlap and leaves holes in the stroke.
+                builder.MoveTo(cur + new Vector2(half, 0));
+                builder.ArcTo(cur, half, half, 0, -MathF.Tau);
+                builder.Close();
                 return;
             case LineJoin.Bevel:
                 AddBevel(builder, cur, d0, d1, half, cross);
@@ -246,7 +252,9 @@ public static class Stroker
         var remaining = lengths[0];
         var on = true;
         // Consume the dash offset first.
-        var skip = offset % (lengths.Length % 2 == 1 ? total * 2 : total);
+        var period = lengths.Length % 2 == 1 ? total * 2 : total;
+        var skip = offset % period;
+        if (skip < 0) skip += period; // a negative offset shifts the pattern the other way
         while (skip > 0)
         {
             if (skip < remaining) { remaining -= skip; break; }

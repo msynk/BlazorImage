@@ -348,11 +348,7 @@
         }
     }
 
-    private void GoToHistory(int index)
-    {
-        Context.Session?.History.GoTo(index);
-        Context.SelectAnnotation(null);
-    }
+    private Task GoToHistory(int index) => Context.GoToHistoryAsync(index);
 
     private Task DownloadAsync() => Context.DownloadAsync(DownloadFileName, new ImageExportOptions
     {

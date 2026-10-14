@@ -151,6 +151,9 @@ public sealed class ImageEditorContext
     /// <summary>Discards every edit.</summary>
     public void Reset() => _editor.Reset();
 
+    /// <summary>Jumps to an entry in the history and shows it.</summary>
+    public Task GoToHistoryAsync(int index) => _editor.GoToHistoryAsync(index);
+
     /// <summary>Sets the zoom factor.</summary>
     public void SetZoom(double zoom) => _editor.SetZoom(zoom);
 

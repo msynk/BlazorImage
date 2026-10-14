@@ -19,7 +19,9 @@ public sealed class BmpDecoder : IImageDecoder
             return new ImageInfo(BinaryPrimitives.ReadUInt16LittleEndian(data[18..]), Math.Abs((int)BinaryPrimitives.ReadInt16LittleEndian(data[20..])), ImageFormat.Bmp, HasAlpha: false);
         }
         var w = BinaryPrimitives.ReadInt32LittleEndian(data[18..]);
-        var h = Math.Abs(BinaryPrimitives.ReadInt32LittleEndian(data[22..]));
+        var rawHeight = BinaryPrimitives.ReadInt32LittleEndian(data[22..]);
+        if (rawHeight == int.MinValue) return null; // has no positive counterpart
+        var h = Math.Abs(rawHeight);
         var bpp = data.Length >= 30 ? BinaryPrimitives.ReadUInt16LittleEndian(data[28..]) : 0;
         return w <= 0 || h <= 0 ? null : new ImageInfo(w, h, ImageFormat.Bmp, HasAlpha: bpp == 32);
     }
@@ -49,9 +51,11 @@ public sealed class BmpDecoder : IImageDecoder
         }
         else
         {
-            if (data.Length < 14 + headerSize || headerSize < 40) throw new ImageDecodeException("Invalid BMP header.");
+            // Compared by subtraction so a huge header size cannot overflow past the check.
+            if (headerSize < 40 || headerSize > data.Length - 14) throw new ImageDecodeException("Invalid BMP header.");
             width = BinaryPrimitives.ReadInt32LittleEndian(data[18..]);
             var h = BinaryPrimitives.ReadInt32LittleEndian(data[22..]);
+            if (h == int.MinValue) throw new ImageDecodeException("Invalid BMP height.");
             height = Math.Abs(h); topDown = h < 0;
             bpp = BinaryPrimitives.ReadUInt16LittleEndian(data[28..]);
             compression = BinaryPrimitives.ReadInt32LittleEndian(data[30..]);

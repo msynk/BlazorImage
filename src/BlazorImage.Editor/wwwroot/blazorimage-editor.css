@@ -220,9 +220,8 @@
     position: relative;
     width: 100%;
     height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    /* Not a flex container: the canvas is placed by its pan offset from the top-left corner, the same mapping the
+       crop and selection overlays use, so the three always line up. The editor centres the image by panning. */
     overflow: hidden;
     /* The editor handles its own gestures; the browser must not scroll or zoom the page underneath. */
     touch-action: none;
@@ -236,6 +235,9 @@
 
 .bi-canvas {
     display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
     /* A checkerboard makes transparency obvious rather than looking like white. */
     background-color: #ffffff;
     background-image:
@@ -248,7 +250,7 @@
     box-shadow: var(--bi-shadow);
     /* Preserve hard pixel edges when zoomed in past 100%. */
     image-rendering: auto;
-    transform-origin: center;
+    transform-origin: 0 0;
 }
 
 /* ---- Crop overlay ---- */
@@ -319,14 +321,14 @@
     outline: var(--bi-focus-ring);
 }
 
-.bi-handle-topleft     { top: -12px; inset-inline-start: -12px; cursor: nwse-resize; }
-.bi-handle-top         { top: -12px; inset-inline-start: calc(50% - 12px); cursor: ns-resize; }
-.bi-handle-topright    { top: -12px; inset-inline-end: -12px; cursor: nesw-resize; }
-.bi-handle-left        { top: calc(50% - 12px); inset-inline-start: -12px; cursor: ew-resize; }
-.bi-handle-right       { top: calc(50% - 12px); inset-inline-end: -12px; cursor: ew-resize; }
-.bi-handle-bottomleft  { bottom: -12px; inset-inline-start: -12px; cursor: nesw-resize; }
-.bi-handle-bottom      { bottom: -12px; inset-inline-start: calc(50% - 12px); cursor: ns-resize; }
-.bi-handle-bottomright { bottom: -12px; inset-inline-end: -12px; cursor: nwse-resize; }
+.bi-handle-topleft     { top: -12px; left: -12px; cursor: nwse-resize; }
+.bi-handle-top         { top: -12px; left: calc(50% - 12px); cursor: ns-resize; }
+.bi-handle-topright    { top: -12px; right: -12px; cursor: nesw-resize; }
+.bi-handle-left        { top: calc(50% - 12px); left: -12px; cursor: ew-resize; }
+.bi-handle-right       { top: calc(50% - 12px); right: -12px; cursor: ew-resize; }
+.bi-handle-bottomleft  { bottom: -12px; left: -12px; cursor: nesw-resize; }
+.bi-handle-bottom      { bottom: -12px; left: calc(50% - 12px); cursor: ns-resize; }
+.bi-handle-bottomright { bottom: -12px; right: -12px; cursor: nwse-resize; }
 
 /* ---- Selection ---- */
 

@@ -113,6 +113,89 @@ public sealed class ImageLoader
         }
     }
 
+    /// <summary>
+    /// Calls <paramref name="onImage"/> with every image the user pastes into the page (Ctrl+V or Cmd+V). Unlike
+    /// <see cref="LoadFromClipboardAsync"/> this needs no clipboard permission, because the browser hands a paste event
+    /// its data directly. Pastes without an image, such as text into a field, are left alone. Dispose the result to
+    /// stop listening.
+    /// </summary>
+    /// <param name="onImage">Receives the decoded image, which the callee owns.</param>
+    /// <param name="onError">Receives decode failures and oversized pastes. When null they are not reported.</param>
+    /// <param name="options">How pasted images are decoded.</param>
+    public async ValueTask<IAsyncDisposable> ListenForPasteAsync(Func<ImageBuffer, Task> onImage, Func<Exception, Task>? onError = null, DecodeOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(onImage);
+        var subscription = new PasteSubscription(this, onImage, onError, options);
+        try
+        {
+            subscription.Id = await _interop.InvokeAsync<int>("listenForPaste", CancellationToken.None, subscription.Reference, MaxSourceBytes).ConfigureAwait(false);
+        }
+        catch
+        {
+            await subscription.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        return subscription;
+    }
+
+    /// <summary>The target of the page's paste listener; JavaScript calls back into it with each pasted image.</summary>
+    internal sealed class PasteSubscription : IAsyncDisposable
+    {
+        private readonly ImageLoader _loader;
+        private readonly Func<ImageBuffer, Task> _onImage;
+        private readonly Func<Exception, Task>? _onError;
+        private readonly DecodeOptions? _options;
+
+        public PasteSubscription(ImageLoader loader, Func<ImageBuffer, Task> onImage, Func<Exception, Task>? onError, DecodeOptions? options)
+        {
+            _loader = loader;
+            _onImage = onImage;
+            _onError = onError;
+            _options = options;
+            Reference = DotNetObjectReference.Create(this);
+        }
+
+        public DotNetObjectReference<PasteSubscription> Reference { get; }
+
+        public int Id { get; set; }
+
+        [JSInvokable]
+        public async Task OnPaste(byte[] bytes, string? mimeType)
+        {
+            try
+            {
+                var image = await _loader.LoadAsync(ImageSource.FromBytes(bytes, contentType: mimeType), _options).ConfigureAwait(true);
+                await _onImage(image).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (_onError is not null)
+            {
+                await _onError(ex).ConfigureAwait(true);
+            }
+        }
+
+        [JSInvokable]
+        public Task OnPasteRejected(long length)
+            => _onError?.Invoke(new ImageLimitExceededException(
+                $"The pasted image is {length:N0} bytes, larger than the {_loader.MaxSourceBytes:N0} bytes allowed.")) ?? Task.CompletedTask;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Id > 0)
+            {
+                try
+                {
+                    await _loader._interop.InvokeVoidAsync("stopListeningForPaste", CancellationToken.None, Id).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is JSDisconnectedException or JSException or ImageCapabilityException or ObjectDisposedException)
+                {
+                    // The page is going away, and its listener with it.
+                }
+                Id = 0;
+            }
+            Reference.Dispose();
+        }
+    }
+
     /// <summary>Fetches and decodes a remote image. Requires the remote server to permit cross-origin reads.</summary>
     private async ValueTask<ImageBuffer> LoadFromUrlAsync(ImageProcessor processor, string url, bool withCredentials, DecodeOptions options, CancellationToken cancellationToken)
     {

@@ -83,6 +83,9 @@ public sealed class PngDecoder : IImageDecoder
             ? (long)height * (1 + ((long)width * bitsPerPixel + 7) / 8)
             : Adam7RawSize(width, height, bitsPerPixel);
         if (rawSize > int.MaxValue) throw new ImageLimitExceededException("PNG raw data too large.");
+        // Deflate cannot expand data by more than about 1032:1, so a header that promises far more than the compressed
+        // data could hold is lying. Checking first stops a tiny file from forcing a huge allocation.
+        if (rawSize > (long)idatLength * 1032 + 1024) throw new ImageDecodeException("Truncated PNG image data.");
         var raw = new byte[rawSize];
         try
         {

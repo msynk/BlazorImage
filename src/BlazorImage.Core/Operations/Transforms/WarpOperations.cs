@@ -307,7 +307,16 @@ public sealed class RotateOperation : ImageOperation, IGeometricOperation
     public override string Name => "Rotate";
     public override bool IsIdentity => Degrees == 0;
 
-    private OrientationOperation? Lossless() => Degrees % 90 == 0 ? OrientationOperation.FromRotation((int)Degrees) : null;
+    /// <summary>
+    /// A quarter turn can be done by moving pixels, but a 90° or 270° turn swaps the dimensions, so it only matches this
+    /// operation when the canvas may grow or the image is square.
+    /// </summary>
+    private OrientationOperation? Lossless(Size input)
+    {
+        if (Degrees % 90 != 0) return null;
+        if (!ExpandCanvas && Degrees % 180 != 0 && input.Width != input.Height) return null;
+        return OrientationOperation.FromRotation((int)Degrees);
+    }
 
     private AffineTransformOperation BuildAffine(Size input)
     {
@@ -319,13 +328,13 @@ public sealed class RotateOperation : ImageOperation, IGeometricOperation
     }
 
     public override Size GetOutputSize(Size inputSize)
-        => Lossless() is { } o ? o.GetOutputSize(inputSize) : BuildAffine(inputSize).GetOutputSize(inputSize);
+        => Lossless(inputSize) is { } o ? o.GetOutputSize(inputSize) : BuildAffine(inputSize).GetOutputSize(inputSize);
 
     public Matrix3x2? GetTransform(Size inputSize)
-        => Lossless() is { } o ? o.GetTransform(inputSize) : BuildAffine(inputSize).GetTransform(inputSize);
+        => Lossless(inputSize) is { } o ? o.GetTransform(inputSize) : BuildAffine(inputSize).GetTransform(inputSize);
 
     public override ImageBuffer Apply(ImageBuffer source, OperationContext context)
-        => Lossless() is { } o ? o.Apply(source, context) : BuildAffine(source.Size).Apply(source, context);
+        => Lossless(source.Size) is { } o ? o.Apply(source, context) : BuildAffine(source.Size).Apply(source, context);
 
     public override string ToString() => $"Rotate({Degrees:0.##}°)";
 }

@@ -164,22 +164,26 @@ public sealed class FontTextRasterizer : ITextRasterizer
             var current = string.Empty;
             foreach (var word in SplitWords(rawLine))
             {
-                var candidate = current.Length == 0 ? word : current + word;
-                if (BuildLine(candidate.TrimEnd(), font, scale, style.LetterSpacing).Width <= limit || current.Length == 0)
+                var candidate = current + word;
+                if (current.Length == 0 || BuildLine(candidate.TrimEnd(), font, scale, style.LetterSpacing).Width <= limit)
                 {
                     current = candidate;
-                    if (current.Length > 0 && BuildLine(current.TrimEnd(), font, scale, style.LetterSpacing).Width > limit)
-                    {
-                        // The single word does not fit: break it.
-                        var broken = BreakWord(current.TrimEnd(), font, scale, style.LetterSpacing, limit);
-                        for (var i = 0; i < broken.Count - 1; i++) lines.Add(BuildLine(broken[i], font, scale, style.LetterSpacing));
-                        current = broken[^1];
-                    }
                 }
                 else
                 {
                     lines.Add(BuildLine(current.TrimEnd(), font, scale, style.LetterSpacing));
                     current = word.TrimStart();
+                }
+
+                // Only a lone word can be too wide here, whether it started the text or was just wrapped: break it,
+                // keeping its trailing space so the next word is not glued to it.
+                var trimmed = current.TrimEnd();
+                if (trimmed.Length > 0 && BuildLine(trimmed, font, scale, style.LetterSpacing).Width > limit)
+                {
+                    var broken = BreakWord(trimmed, font, scale, style.LetterSpacing, limit);
+                    if (broken.Count == 0) continue;
+                    for (var i = 0; i < broken.Count - 1; i++) lines.Add(BuildLine(broken[i], font, scale, style.LetterSpacing));
+                    current = broken[^1] + current[trimmed.Length..];
                 }
             }
             lines.Add(BuildLine(current.TrimEnd(), font, scale, style.LetterSpacing));

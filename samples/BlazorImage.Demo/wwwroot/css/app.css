@@ -268,6 +268,7 @@ code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-si
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 .stat-value { font-size: 1.05rem; font-weight: 620; font-variant-numeric: tabular-nums; }
 .stat-value.good { color: var(--success); }
+.stat-value.bad { color: var(--danger); }
 
 table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.data th, table.data td { text-align: start; padding: 7px 8px; border-bottom: 1px solid var(--border); }
@@ -378,6 +379,27 @@ pre.code {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Shown next to a result while it is being recomputed, so a slow run never looks like a frozen page. */
+.working {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.working::before {
+    content: "";
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+}
+
+.sample-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 
 #blazor-error-ui {
     display: none;

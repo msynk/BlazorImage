@@ -107,7 +107,7 @@ public static class PipelineOptimizer
             }
             // resize → resize: the first result is entirely replaced by the second when both fully determine
             // their output from the input size (no padding, no anchoring that depends on content).
-            if (a is ResizeOperation ra && b is ResizeOperation rb && CanDropFirstResize(ra, rb))
+            if (a is ResizeOperation ra && b is ResizeOperation rb && CanDropFirstResize(ra, rb, SizeBefore(ops, i, inputSize)))
             {
                 ops.RemoveAt(i);
                 changed = true;
@@ -118,7 +118,7 @@ public static class PipelineOptimizer
         return changed;
     }
 
-    private static bool CanDropFirstResize(ResizeOperation first, ResizeOperation second)
+    private static bool CanDropFirstResize(ResizeOperation first, ResizeOperation second, Size? inputSize)
     {
         // Dropping the first resize changes the second's input size, which changes its output for modes whose
         // output depends on the input aspect ratio. Only safe when the second produces a fixed canvas covering
@@ -127,7 +127,28 @@ public static class PipelineOptimizer
         if (second.Width is null || second.Height is null) return false;
         // Cover crops based on the input aspect ratio; a preceding proportional resize does not change the ratio,
         // but Contain/Cover/Stretch in the first step can. Only drop when the first preserves aspect ratio.
-        return first.Mode is ResizeMode.Fit or ResizeMode.Max or ResizeMode.Min;
+        if (first.Mode is not (ResizeMode.Fit or ResizeMode.Max or ResizeMode.Min)) return false;
+        if (second.Mode == ResizeMode.Stretch) return true;
+        // Proportional modes round to whole pixels, so they only nearly keep the ratio, and Cover frames from the exact
+        // ratio. Drop the first only when its output ratio is provably identical to its input's.
+        if (inputSize is not { } size) return false;
+        Size output;
+        try { output = first.GetOutputSize(size); }
+        catch (ArgumentException) { return false; }
+        return (long)output.Width * size.Height == (long)output.Height * size.Width;
+    }
+
+    /// <summary>The size entering <c>ops[index]</c>, or null when it cannot be known ahead of execution.</summary>
+    private static Size? SizeBefore(List<IImageOperation> ops, int index, Size? inputSize)
+    {
+        if (inputSize is not { } current) return null;
+        for (var i = 0; i < index; i++)
+        {
+            if (ops[i] is AutoOrientOperation) return null;
+            try { current = ops[i].GetOutputSize(current); }
+            catch (ArgumentException) { return null; }
+        }
+        return current;
     }
 
     /// <summary>
@@ -150,6 +171,8 @@ public static class PipelineOptimizer
                     return true;
                 }
             }
+            // AutoOrient's output size depends on metadata, not on the input size, so nothing after it can be planned.
+            if (ops[i] is AutoOrientOperation) return false;
             // Optimising is best effort. When an operation cannot be applied to the size it would receive (a crop
             // that falls outside the image, say) there is nothing to fuse past this point, and the error belongs to
             // execution, which reports which step failed. Analysis must not be the thing that throws.

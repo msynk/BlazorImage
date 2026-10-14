@@ -129,6 +129,7 @@ public sealed record ImageEditorStrings
     public string UnsupportedFormat { get; init; } = "That file format is not supported.";
     public string LoadFailed { get; init; } = "The image could not be opened.";
     public string ExportFailed { get; init; } = "The image could not be exported.";
+    public string TextNeedsFont { get; init; } = "Text cannot be drawn until a font is registered with the text rasteriser.";
     public string FormatNotSupported { get; init; } = "This browser cannot save that format. A supported format was used instead.";
 
     // Accessibility

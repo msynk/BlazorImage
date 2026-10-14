@@ -215,7 +215,10 @@ public sealed class BrowserImageEncoder : IImageEncoder
         }
         catch (JSException ex) when (ex.Message.Contains("unsupported-format:", StringComparison.Ordinal))
         {
-            var actual = ex.Message.Split(':').LastOrDefault()?.Trim();
+            // The message is "unsupported-format:<requested>:<produced>", possibly followed by a JavaScript stack trace.
+            var marker = ex.Message[ex.Message.IndexOf("unsupported-format:", StringComparison.Ordinal)..];
+            var parts = marker.Split('\n', 2)[0].Split(':');
+            var actual = parts.Length > 2 ? parts[2].Trim() : null;
             throw new ImageCapabilityException(
                 $"This browser cannot encode {options.Format}; it produced {actual ?? "another format"} instead. " +
                 "Check ImageCapabilities.CanEncode before exporting and fall back to a supported format.");

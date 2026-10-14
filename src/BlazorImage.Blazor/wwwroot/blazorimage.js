@@ -194,7 +194,9 @@ export async function identify(bytes, mimeType) {
  * Returns a ByteResult, or throws when the browser cannot produce that format.
  */
 export async function encode(pixels, width, height, mimeType, quality, background) {
-    const canvas = rentCanvas(width, height);
+    // Not pooled: a context's attributes are fixed by its first getContext call, and this one opts out of
+    // willReadFrequently. Returned to the pool, it would make later pixel reads on that canvas slow.
+    const canvas = createCanvas(width, height);
     try {
         const ctx = get2d(canvas, { willReadFrequently: false });
         // Formats without an alpha channel need an explicit backdrop, otherwise the browser uses black.
@@ -221,7 +223,8 @@ export async function encode(pixels, width, height, mimeType, quality, backgroun
         }
         return new ByteResult(new Uint8Array(await blobToArrayBuffer(blob)), { mimeType: blob.type, width, height });
     } finally {
-        returnCanvas(canvas);
+        canvas.width = 0;
+        canvas.height = 0;
     }
 }
 
@@ -250,7 +253,10 @@ export async function getCapabilities() {
             } catch { /* not supported */ }
         }
     }
-    returnCanvasSafe(probe);
+    // Not returned to the pool: its context was created without willReadFrequently, and a pooled canvas keeps the
+    // attributes of its first context, which would make every later pixel read on it slow.
+    probe.width = 0;
+    probe.height = 0;
 
     for (const [type, data] of Object.entries(PROBE_IMAGES)) {
         try {
@@ -278,11 +284,8 @@ export async function getCapabilities() {
         hardwareConcurrency: nav.hardwareConcurrency ?? null,
         deviceMemoryGb: nav.deviceMemory ?? null,
         maxCanvasDimension: probeMaxCanvasDimension(),
+        maxCanvasArea: probeMaxCanvasArea(),
     };
-}
-
-function returnCanvasSafe(canvas) {
-    try { returnCanvas(canvas); } catch { /* ignore */ }
 }
 
 // 1x1 images used to probe decode support.
@@ -314,6 +317,30 @@ function probeMaxCanvasDimension() {
     return 4096;
 }
 
+/**
+ * Finds whether the platform caps canvas area below its edge limit. iOS Safari allows a 32767 pixel edge but only
+ * 16,777,216 pixels in total, so a canvas that passes the edge probe can still come out blank. Probing the real area
+ * limit would allocate gigabytes, so this checks the one well-known cap and otherwise reports 0 (unknown).
+ */
+function probeMaxCanvasArea() {
+    const iosLimit = 4096 * 4096;
+    try {
+        const canvas = createCanvas(4097, 4097);
+        const ctx = canvas.getContext('2d');
+        let ok = false;
+        if (ctx) {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(4096, 4096, 1, 1);
+            ok = ctx.getImageData(4096, 4096, 1, 1).data[3] === 255;
+        }
+        canvas.width = 0;
+        canvas.height = 0;
+        return ok ? 0 : iosLimit;
+    } catch {
+        return iosLimit;
+    }
+}
+
 /** Reads the first image on the clipboard, or null when there is none. */
 export async function readClipboardImage() {
     if (!navigator.clipboard || !navigator.clipboard.read) throw new Error('This browser does not support reading images from the clipboard.');
@@ -325,6 +352,40 @@ export async function readClipboardImage() {
         return new ByteResult(new Uint8Array(await blobToArrayBuffer(blob)), { mimeType: type });
     }
     return null;
+}
+
+let pasteListenerId = 0;
+const pasteListeners = new Map();
+
+/**
+ * Forwards images pasted anywhere in the document to .NET. A paste event carries its data, so unlike
+ * navigator.clipboard.read this needs no permission. Pastes without an image are left for the page to handle.
+ */
+export function listenForPaste(dotNetRef, maxBytes) {
+    const id = ++pasteListenerId;
+    const handler = async (e) => {
+        const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
+        const item = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+        const file = item?.getAsFile();
+        if (!file) return;
+        e.preventDefault();
+        if (maxBytes > 0 && file.size > maxBytes) {
+            await dotNetRef.invokeMethodAsync('OnPasteRejected', file.size);
+            return;
+        }
+        const bytes = new Uint8Array(await blobToArrayBuffer(file));
+        await dotNetRef.invokeMethodAsync('OnPaste', bytes, file.type || null);
+    };
+    document.addEventListener('paste', handler);
+    pasteListeners.set(id, handler);
+    return id;
+}
+
+export function stopListeningForPaste(id) {
+    const handler = pasteListeners.get(id);
+    if (!handler) return;
+    document.removeEventListener('paste', handler);
+    pasteListeners.delete(id);
 }
 
 /** Writes an image to the clipboard. */
@@ -430,7 +491,7 @@ export function renderText(text, font, color, maxWidth, letterSpacing, lineHeigh
         const ctx = get2d(probe);
         ctx.font = font;
         if (letterSpacing && 'letterSpacing' in ctx) ctx.letterSpacing = `${letterSpacing}px`;
-        metrics = measureLines(ctx, text, maxWidth);
+        metrics = measureLines(ctx, text, maxWidth, lineHeight);
     } finally {
         returnCanvas(probe);
     }
@@ -467,12 +528,13 @@ export function renderText(text, font, color, maxWidth, letterSpacing, lineHeigh
     }
 }
 
-function measureLines(ctx, text, maxWidth) {
+function measureLines(ctx, text, maxWidth, lineHeight) {
     const sample = ctx.measureText('Mg');
     const ascent = sample.fontBoundingBoxAscent ?? sample.actualBoundingBoxAscent ?? 0;
     const descent = sample.fontBoundingBoxDescent ?? sample.actualBoundingBoxDescent ?? 0;
     const fontSize = ascent + descent;
-    const lineHeight = fontSize * 1.2;
+    // lineHeight is a multiple of the font size, as in TextStyle.LineHeight.
+    const lineAdvance = fontSize * (lineHeight > 0 ? lineHeight : 1.2);
     const raw = String(text).split('\n');
     const lines = [];
     for (const paragraph of raw) {
@@ -490,7 +552,7 @@ function measureLines(ctx, text, maxWidth) {
         lines.push(current);
     }
     const width = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
-    return { lines, width, ascent, descent, fontSize, lineHeight };
+    return { lines, width, ascent, descent, fontSize, lineHeight: lineAdvance };
 }
 
 /** Starts a camera stream into a video element and returns the stream so it can be stopped. */
@@ -568,19 +630,32 @@ export function stopObservingResize(element) {
  * Prevents the page from scrolling or zooming while the user drags on the editor surface.
  * Registered as a non-passive listener, which Blazor's own event handling cannot do.
  */
+const scrollKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Delete', 'Backspace']);
+
+/**
+ * Stops the page scrolling or zooming while the user works on an element: touch drags, pinch gestures, the mouse
+ * wheel (which the editor uses for zoom), and the keys the editor binds while the element itself has focus. These
+ * need non-passive listeners on the element, which Blazor's own event handling cannot register.
+ */
 export function suppressTouchScrolling(element) {
-    if (!element) return;
-    const handler = (e) => { if (e.cancelable) e.preventDefault(); };
-    element.addEventListener('touchmove', handler, { passive: false });
-    element.addEventListener('gesturestart', handler, { passive: false });
-    element.__blazorImageTouchHandler = handler;
+    if (!element || element.__blazorImageHandlers) return;
+    const cancel = (e) => { if (e.cancelable) e.preventDefault(); };
+    const keys = (e) => { if (e.target === element && scrollKeys.has(e.key)) e.preventDefault(); };
+    element.addEventListener('touchmove', cancel, { passive: false });
+    element.addEventListener('gesturestart', cancel, { passive: false });
+    element.addEventListener('wheel', cancel, { passive: false });
+    element.addEventListener('keydown', keys);
+    element.__blazorImageHandlers = { cancel, keys };
 }
 
 export function restoreTouchScrolling(element) {
-    if (!element || !element.__blazorImageTouchHandler) return;
-    element.removeEventListener('touchmove', element.__blazorImageTouchHandler);
-    element.removeEventListener('gesturestart', element.__blazorImageTouchHandler);
-    delete element.__blazorImageTouchHandler;
+    const handlers = element?.__blazorImageHandlers;
+    if (!handlers) return;
+    element.removeEventListener('touchmove', handlers.cancel);
+    element.removeEventListener('gesturestart', handlers.cancel);
+    element.removeEventListener('wheel', handlers.cancel);
+    element.removeEventListener('keydown', handlers.keys);
+    delete element.__blazorImageHandlers;
 }
 
 /** Captures the pointer so a drag keeps tracking outside the element. */

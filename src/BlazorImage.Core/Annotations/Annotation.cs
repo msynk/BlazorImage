@@ -85,12 +85,18 @@ public abstract record Annotation
     /// <summary>True when the point (in image coordinates) is on the annotation.</summary>
     public virtual bool HitTest(Vector2 point, float tolerance = 4f)
     {
-        var local = point;
-        if (Rotation != 0 && Matrix3x2.Invert(GetTransform(), out var inverse)) local = Vector2.Transform(point, inverse);
+        var local = ToLocal(point);
         var b = GetBounds();
         b.Inflate(tolerance, tolerance);
         return b.Contains(local.X, local.Y);
     }
+
+    /// <summary>
+    /// Maps a point in image coordinates into the annotation's unrotated geometry, which is where hit tests must be
+    /// evaluated because rendering applies <see cref="Rotation"/> on top of that geometry.
+    /// </summary>
+    protected Vector2 ToLocal(Vector2 point)
+        => Rotation != 0 && Matrix3x2.Invert(GetTransform(), out var inverse) ? Vector2.Transform(point, inverse) : point;
 
     /// <summary>Renders the annotation with its rotation and opacity applied.</summary>
     internal void RenderWithTransform(ImageCanvas canvas, AnnotationRenderContext context)

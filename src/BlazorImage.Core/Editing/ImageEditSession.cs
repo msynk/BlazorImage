@@ -33,8 +33,12 @@ public sealed class ImageEditSession : IDisposable
     private ImageBuffer? _proxy;
     private ImageBuffer? _preview;
     private CancellationTokenSource? _renderCts;
+    // Never disposed: a render that is still running releases it on the way out, and SemaphoreSlim only needs
+    // disposing when its wait handle has been used.
     private readonly SemaphoreSlim _renderLock = new(1, 1);
     private bool _disposed;
+    // Incremented whenever the source changes, so a render that started on the old source cannot publish its result.
+    private int _sourceVersion;
 
     /// <summary>Creates a session that takes ownership of <paramref name="original"/>.</summary>
     public ImageEditSession(ImageBuffer original, ImageEditSessionOptions? options = null)
@@ -102,29 +106,39 @@ public sealed class ImageEditSession : IDisposable
     {
         ArgumentNullException.ThrowIfNull(change);
         var next = change(Document);
+        if (History.IsTransientOpen)
+        {
+            // The end of a drag: its final state replaces the entry the drag opened, rather than adding a second one.
+            History.CommitTransient(next, label);
+            DocumentChanged?.Invoke(next);
+            return;
+        }
         if (ReferenceEquals(next, Document)) return;
         History.Push(next, label);
         DocumentChanged?.Invoke(next);
     }
 
     /// <summary>
-    /// Applies a change without adding a history entry, replacing the current one. Use while a control is being dragged,
-    /// then call <see cref="Commit"/> when the interaction ends.
+    /// Applies a change while a control is being dragged. The first change of an interaction adds one history entry and
+    /// every later one replaces it, so a drag costs a single undo step and undo returns to the state before the drag.
+    /// End the interaction with <see cref="Commit"/>, or with <see cref="Apply"/> carrying the final value.
     /// </summary>
     public void ApplyTransient(Func<ImageDocument, ImageDocument> change, string? label = null)
     {
         ArgumentNullException.ThrowIfNull(change);
         var next = change(Document);
         if (ReferenceEquals(next, Document)) return;
-        History.Amend(next, label);
+        History.PushTransient(next, label ?? "Edit");
         DocumentChanged?.Invoke(next);
     }
 
-    /// <summary>Turns the current amended state into a permanent history entry.</summary>
+    /// <summary>
+    /// Ends the interaction started by <see cref="ApplyTransient"/>, labelling its history entry. Does nothing when no
+    /// interaction is in progress, so a click that never moved anything adds no entry.
+    /// </summary>
     public void Commit(string label)
     {
-        History.Push(Document, label);
-        DocumentChanged?.Invoke(Document);
+        if (History.CommitTransient(Document, label)) DocumentChanged?.Invoke(Document);
     }
 
     /// <summary>Adds an operation and records it.</summary>
@@ -170,12 +184,18 @@ public sealed class ImageEditSession : IDisposable
         ArgumentNullException.ThrowIfNull(image);
         ObjectDisposedException.ThrowIf(_disposed, this);
         var old = _original;
+        var oldProxy = _proxy;
         _original = image;
-        DisposeProxy();
+        _proxy = null;
+        _sourceVersion++;
+        // A render of the old source is now pointless, and must not outlive the buffers it reads.
+        CancelQuietly(Interlocked.Exchange(ref _renderCts, null));
         DisposePreview();
         UpdateProxyGeometry();
         History.Clear(ImageDocument.Create(image));
-        if (disposeExisting && !ReferenceEquals(old, image)) old.Dispose();
+        DisposeWhenIdle(
+            oldProxy is not null && !ReferenceEquals(oldProxy, old) ? oldProxy : null,
+            disposeExisting && !ReferenceEquals(old, image) ? old : null);
         MarkPreviewStale();
         DocumentChanged?.Invoke(Document);
     }
@@ -191,7 +211,16 @@ public sealed class ImageEditSession : IDisposable
     /// tick should catch and ignore it: it means a newer render has taken over, not that anything failed.
     /// </remarks>
     /// <exception cref="OperationCanceledException">The render was superseded by a newer one, or the caller cancelled.</exception>
-    public async ValueTask<ImageBuffer> RenderPreviewAsync(CancellationToken cancellationToken = default)
+    public ValueTask<ImageBuffer> RenderPreviewAsync(CancellationToken cancellationToken = default)
+        => RenderPreviewAsync(null, cancellationToken);
+
+    /// <summary>
+    /// Renders the preview of the document as changed by <paramref name="overlay"/>, without recording that change.
+    /// Use it to show something that is not part of the edit yet, such as a shape still being drawn. The resulting
+    /// preview counts as stale, since it does not match the document.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The render was superseded by a newer one, or the caller cancelled.</exception>
+    public async ValueTask<ImageBuffer> RenderPreviewAsync(Func<ImageDocument, ImageDocument>? overlay, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -202,7 +231,8 @@ public sealed class ImageEditSession : IDisposable
 
         try
         {
-            await _renderLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Wait on the render's own token so a newer render, or Dispose, also releases a call still queued here.
+            await _renderLock.WaitAsync(cts.Token).ConfigureAwait(false);
         }
         catch
         {
@@ -214,8 +244,12 @@ public sealed class ImageEditSession : IDisposable
         try
         {
             cts.Token.ThrowIfCancellationRequested();
+            if (_disposed) throw new OperationCanceledException(cts.Token);
+            var sourceVersion = _sourceVersion;
+            var source = Document;
             var proxy = EnsureProxy();
-            var document = UsesProxy ? Document.ForScale(ProxyScale) : Document;
+            var document = overlay is null ? source : overlay(source);
+            if (UsesProxy) document = document.ForScale(ProxyScale);
             var rendered = await _renderer.RenderAsync(document, proxy, new PipelineExecutionOptions
             {
                 Allocator = _allocator,
@@ -223,9 +257,17 @@ public sealed class ImageEditSession : IDisposable
                 CancellationToken = cts.Token,
             }, ProxyScale).ConfigureAwait(false);
 
+            if (_disposed || sourceVersion != _sourceVersion)
+            {
+                // The session was disposed or given a new source while this ran; the result belongs to neither.
+                rendered.Dispose();
+                throw new OperationCanceledException(cts.Token);
+            }
+
             var old = _preview;
             _preview = rendered;
-            IsPreviewStale = false;
+            // An edit made while this ran is not in the result, so the preview is only fresh if nothing changed.
+            IsPreviewStale = overlay is not null || !ReferenceEquals(source, Document);
             old?.Dispose();
             PreviewUpdated?.Invoke(rendered);
             return rendered;
@@ -307,13 +349,6 @@ public sealed class ImageEditSession : IDisposable
         return _proxy;
     }
 
-    private void DisposeProxy()
-    {
-        var proxy = _proxy;
-        _proxy = null;
-        if (proxy is not null && !ReferenceEquals(proxy, _original)) proxy.Dispose();
-    }
-
     private void DisposePreview()
     {
         var preview = _preview;
@@ -330,9 +365,32 @@ public sealed class ImageEditSession : IDisposable
         // still reading its token. It disposes it on the way out.
         CancelQuietly(Interlocked.Exchange(ref _renderCts, null));
         DisposePreview();
-        DisposeProxy();
-        _original.Dispose();
-        _renderLock.Dispose();
+        var proxy = _proxy;
+        _proxy = null;
+        DisposeWhenIdle(proxy is not null && !ReferenceEquals(proxy, _original) ? proxy : null, _original);
+    }
+
+    /// <summary>
+    /// Disposes source buffers once no render is reading them. A cancelled render only notices at its next check, and
+    /// returning its input to the pool before then would let another image overwrite the pixels mid-read.
+    /// </summary>
+    private void DisposeWhenIdle(ImageBuffer? first, ImageBuffer? second)
+    {
+        if (first is null && second is null) return;
+        if (_renderLock.Wait(0))
+        {
+            try { first?.Dispose(); second?.Dispose(); }
+            finally { _renderLock.Release(); }
+            return;
+        }
+        _ = DisposeAfterRenderAsync(first, second);
+    }
+
+    private async Task DisposeAfterRenderAsync(ImageBuffer? first, ImageBuffer? second)
+    {
+        await _renderLock.WaitAsync().ConfigureAwait(false);
+        try { first?.Dispose(); second?.Dispose(); }
+        finally { _renderLock.Release(); }
     }
 }
 

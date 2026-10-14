@@ -7,7 +7,7 @@
 @inject ImageLoader Loader
 @inject ImageExporter Exporter
 @inject IImageCapabilityProvider Capabilities
-@inject BlazorImage.Text.BrowserTextRasterizer TextRasterizer
+@inject BlazorImage.Text.FontTextRasterizer FontRasterizer
 @inject BlazorImageOptions Options
 
 @*
@@ -114,6 +114,11 @@
     private bool _messageIsError;
     private CancellationTokenSource? _renderCts;
     private int _stepCounter;
+    // The Image parameter last loaded. The session holds a copy, so it cannot be compared with the parameter itself.
+    private ImageBuffer? _loadedParameter;
+    private bool _fitPending;
+    private SizeF? _viewport;
+    private Vector2 _panLast;
 
     /// <summary>The image to edit. Setting this replaces the current session and discards its history.</summary>
     [Parameter] public ImageBuffer? Image { get; set; }
@@ -166,6 +171,12 @@
     /// <summary>Number of undo steps kept.</summary>
     [Parameter] public int MaxHistoryDepth { get; set; } = 100;
 
+    /// <summary>
+    /// Draws text and step-number annotations. Null uses the <see cref="BlazorImage.Text.FontTextRasterizer"/> from
+    /// dependency injection, which renders text once a font has been registered with it.
+    /// </summary>
+    [Parameter] public ITextRasterizer? TextRasterizer { get; set; }
+
     /// <summary>Export settings used by the built-in save action.</summary>
     [Parameter] public ImageExportOptions ExportOptions { get; set; } = ImageExportOptions.Png;
 
@@ -187,9 +198,22 @@
     /// <summary>The current document, or null when no image is loaded.</summary>
     public ImageDocument? Document => _session?.Document;
 
+    // Annotations live in full-resolution coordinates; the canvas shows the preview, which may be a smaller proxy.
     private RectangleF? SelectionBounds => _selectedId is { } id && _session?.Document.FindAnnotation(id) is { } a
-        ? a.GetRotatedBounds()
+        ? ToPreview(a.GetRotatedBounds())
         : null;
+
+    private Vector2 ToDocument(Vector2 previewPoint) => _session?.PreviewToOutput(previewPoint) ?? previewPoint;
+
+    private RectangleF ToPreview(RectangleF r)
+    {
+        if (_session is not { UsesProxy: true } session) return r;
+        var scale = (float)session.ProxyScale;
+        return new RectangleF(r.X * scale, r.Y * scale, r.Width * scale, r.Height * scale);
+    }
+
+    /// <summary>Preview pixels per document pixel.</summary>
+    private float PreviewScale => _session is { UsesProxy: true } s ? (float)s.ProxyScale : 1f;
 
     protected override async Task OnInitializedAsync()
     {
@@ -198,10 +222,31 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (Image is not null && (_session is null || !ReferenceEquals(_session.Original, Image)))
+        if (Image is not null && !ReferenceEquals(_loadedParameter, Image))
         {
+            _loadedParameter = Image;
             await LoadImageAsync(Image, takeOwnership: false);
         }
+        else if (Image is null)
+        {
+            _loadedParameter = null;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Fitting needs the size of the editing area, which only exists once the canvas has rendered.
+        if (!_fitPending || _canvas is null || _session?.Preview is not { } preview) return;
+        _fitPending = false;
+        _viewport = await _canvas.GetViewportSizeAsync();
+        if (_viewport is not { } viewport) return;
+        const float margin = 24;
+        var fit = Math.Min((viewport.Width - margin) / preview.Width, (viewport.Height - margin) / preview.Height);
+        _zoom = Math.Clamp(Math.Min(1.0, fit), 0.05, 32);
+        _pan = new Vector2(
+            (float)((viewport.Width - preview.Width * _zoom) / 2),
+            (float)((viewport.Height - preview.Height * _zoom) / 2));
+        StateHasChanged();
     }
 
     private ImageEditorContext BuildContext() => new(this);
@@ -229,6 +274,7 @@
         {
             MaxProxyDimension = EffectiveProxyDimension,
             MaxHistoryDepth = MaxHistoryDepth,
+            TextRasterizer = EffectiveTextRasterizer,
         });
         _selectedId = null;
         _cropRectangle = null;
@@ -262,7 +308,7 @@
 
     // ---- Preview rendering ----
 
-    private async Task RenderPreviewAsync()
+    private async Task RenderPreviewAsync(Func<ImageDocument, ImageDocument>? overlay = null)
     {
         if (_session is null) return;
 
@@ -272,7 +318,7 @@
         CancelQuietly(Interlocked.Exchange(ref _renderCts, cts));
         try
         {
-            await _session.RenderPreviewAsync(cts.Token);
+            await _session.RenderPreviewAsync(overlay, cts.Token);
             _previewVersion++;
         }
         catch (OperationCanceledException)
@@ -316,11 +362,13 @@
     private async Task OnDragStart(CanvasPointerArgs e)
     {
         if (_session is null) return;
-        var point = e.Point;
+        // Crop works on the preview (ApplyCropAsync maps it to full resolution); everything else edits the document.
+        var point = _tool == EditorToolKind.Crop ? e.Point : ToDocument(e.Point);
         switch (_tool)
         {
             case EditorToolKind.Pan:
                 _drag = new ToolDrag { Start = point, Current = point };
+                _panLast = e.Screen;
                 break;
 
             case EditorToolKind.Crop:
@@ -339,7 +387,7 @@
                 break;
 
             case EditorToolKind.Select:
-                var hit = _session.Document.HitTest(point, 6f / (float)Math.Max(_zoom, 0.01));
+                var hit = _session.Document.HitTest(point, 6f / (float)Math.Max(_zoom, 0.01) / PreviewScale);
                 _selectedId = hit?.Id;
                 if (hit is not null)
                 {
@@ -349,10 +397,12 @@
                 break;
 
             case EditorToolKind.Text:
+                WarnIfTextCannotRender();
                 await AddTextAnnotationAsync(point);
                 break;
 
             case EditorToolKind.Step:
+                WarnIfTextCannotRender();
                 _stepCounter++;
                 await ApplyAndRenderAsync(d => d.AddAnnotation(new StepAnnotation
                 {
@@ -384,28 +434,30 @@
     private async Task OnDragMove(CanvasPointerArgs e)
     {
         if (_session is null || _drag is null) return;
-        _drag.Current = e.Point;
+        var point = _tool == EditorToolKind.Crop ? e.Point : ToDocument(e.Point);
+        _drag.Current = point;
         _drag.ShiftKey = e.ShiftKey;
         _drag.AltKey = e.AltKey;
 
         switch (_tool)
         {
             case EditorToolKind.Pan:
-                _pan += (e.Point - _drag.Start) * (float)_zoom;
-                _drag.Start = e.Point;
+                // Measured on screen: image coordinates move under the pointer as the view pans.
+                _pan += e.Screen - _panLast;
+                _panLast = e.Screen;
                 StateHasChanged();
                 return;
 
             case EditorToolKind.Crop:
-                UpdateCropRectangle(e.Point);
+                UpdateCropRectangle(point);
                 StateHasChanged();
                 return;
 
             case EditorToolKind.Select when _selectedId is { } id:
             {
-                var delta = e.Point - _selectionDragOrigin;
+                var delta = point - _selectionDragOrigin;
                 if (delta.LengthSquared() < 0.01f) return;
-                _selectionDragOrigin = e.Point;
+                _selectionDragOrigin = point;
                 var annotation = _session.Document.FindAnnotation(id);
                 if (annotation is null || annotation.IsLocked) return;
                 await ApplyAndRenderAsync(d => d.UpdateAnnotation(annotation.Translate(delta.X, delta.Y)), Strings.Select, transient: true);
@@ -415,7 +467,7 @@
             default:
                 if (EditorTools.BuiltIn.TryGetValue(_tool, out var tool))
                 {
-                    if (_tool == EditorToolKind.Draw) AddSmoothedPoint(e.Point);
+                    if (_tool == EditorToolKind.Draw) AddSmoothedPoint(point);
                     _dragPreview = tool.BuildPreview(_drag, _settings);
                     await RenderWithPreviewAsync();
                 }
@@ -445,7 +497,7 @@
             default:
                 if (EditorTools.BuiltIn.TryGetValue(_tool, out var tool))
                 {
-                    drag.Current = e.Point;
+                    drag.Current = ToDocument(e.Point);
                     var annotation = tool.BuildFinal(drag, _settings);
                     if (annotation is not null)
                     {
@@ -470,10 +522,8 @@
         if (_session is null) return;
         var preview = _dragPreview;
         if (preview is null) { await RenderPreviewAsync(); return; }
-        _session.ApplyTransient(d => d.AddAnnotation(preview), null);
-        await RenderPreviewAsync();
-        // Remove it again so the document never contains a half-finished shape.
-        _session.ApplyTransient(d => d.RemoveAnnotation(preview.Id), null);
+        // Drawn as an overlay, so the document and its history never contain a half-finished shape.
+        await RenderPreviewAsync(d => d.AddAnnotation(preview));
         StateHasChanged();
     }
 
@@ -481,7 +531,7 @@
     private void AddSmoothedPoint(Vector2 point)
     {
         if (_drag is null) return;
-        var minimumSpacing = 1.5f / (float)Math.Max(_zoom, 0.05);
+        var minimumSpacing = 1.5f / (float)Math.Max(_zoom, 0.05) / PreviewScale;
         if (_drag.Points.Count > 0 && Vector2.Distance(_drag.Points[^1], point) < minimumSpacing) return;
         _drag.Points.Add(point);
     }
@@ -499,6 +549,22 @@
         await ApplyAndRenderAsync(d => d.AddAnnotation(annotation), Strings.Text);
         _selectedId = annotation.Id;
     }
+
+    /// <summary>
+    /// Text and step numbers are drawn as glyph outlines, which needs a font. Without one they would be added but
+    /// invisible, so say why instead of leaving the user to wonder.
+    /// </summary>
+    private void WarnIfTextCannotRender()
+    {
+        if (EffectiveTextRasterizer is null) ShowMessage(Strings.TextNeedsFont, isError: false);
+    }
+
+    /// <summary>
+    /// The rasteriser given to the session. The injected font rasteriser throws when asked to draw without a font, which
+    /// would fail every render containing text, so it is only used once a font has been registered; until then text is
+    /// skipped and <see cref="WarnIfTextCannotRender"/> explains why.
+    /// </summary>
+    private ITextRasterizer? EffectiveTextRasterizer => TextRasterizer ?? (FontRasterizer.HasFonts ? FontRasterizer : null);
 
     private void UpdateCropRectangle(Vector2 point)
     {
@@ -603,10 +669,10 @@
                 break;
             }
             case "+" or "=":
-                OnZoomGesture(new ZoomArgs(1.2, default));
+                OnZoomGesture(new ZoomArgs(1.2, ViewCentre()));
                 break;
             case "-" or "_":
-                OnZoomGesture(new ZoomArgs(1 / 1.2, default));
+                OnZoomGesture(new ZoomArgs(1 / 1.2, ViewCentre()));
                 break;
             case "0" when ctrl:
                 FitToWindow();
@@ -615,7 +681,27 @@
         StateHasChanged();
     }
 
-    private static string ToolLabel(EditorToolKind kind) => kind.ToString();
+    /// <summary>The image point at the centre of the visible area, used as the focus of non-pointer zooming.</summary>
+    private Vector2 ViewCentre()
+    {
+        var viewport = _viewport ?? (_session?.Preview is { } p ? new SizeF((float)(p.Width * _zoom), (float)(p.Height * _zoom)) : SizeF.Empty);
+        return (new Vector2(viewport.Width / 2, viewport.Height / 2) - _pan) / (float)_zoom;
+    }
+
+    // History labels are shown to the user, so they come from the localised strings rather than the enum names.
+    private string ToolLabel(EditorToolKind kind) => kind switch
+    {
+        EditorToolKind.Draw => Strings.Draw,
+        EditorToolKind.Line => Strings.Line,
+        EditorToolKind.Arrow => Strings.Arrow,
+        EditorToolKind.Rectangle => Strings.Rectangle,
+        EditorToolKind.Ellipse => Strings.Ellipse,
+        EditorToolKind.Highlight => Strings.Highlight,
+        EditorToolKind.Redact => Strings.Redact,
+        EditorToolKind.Text => Strings.Text,
+        EditorToolKind.Step => Strings.Step,
+        _ => kind.ToString(),
+    };
 
     // ---- Public actions, also used by custom toolbars ----
 
@@ -752,6 +838,15 @@
         _ = RenderAndNotifyAsync();
     }
 
+    /// <summary>Jumps to an entry in the history, as the history panel does.</summary>
+    public Task GoToHistoryAsync(int index)
+    {
+        if (_session is null || index < 0 || index >= _session.History.Entries.Count) return Task.CompletedTask;
+        _session.History.GoTo(index);
+        _selectedId = null;
+        return RenderAndNotifyAsync();
+    }
+
     /// <summary>Discards every edit.</summary>
     public void Reset()
     {
@@ -769,18 +864,18 @@
         StateHasChanged();
     }
 
-    /// <summary>Sets the zoom, keeping the image centred.</summary>
+    /// <summary>Sets the zoom, keeping the point at the centre of the view where it is.</summary>
     public void SetZoom(double zoom)
     {
-        _zoom = Math.Clamp(zoom, 0.05, 32);
-        StateHasChanged();
+        var next = Math.Clamp(zoom, 0.05, 32);
+        OnZoomGesture(new ZoomArgs(next / _zoom, ViewCentre()));
     }
 
-    /// <summary>Resets zoom and pan so the whole image is visible.</summary>
+    /// <summary>Zooms and pans so the whole image is visible and centred, never enlarging it past 100%.</summary>
     public void FitToWindow()
     {
-        _zoom = 1.0;
-        _pan = default;
+        // Measured after the next render, when the canvas and its container exist.
+        _fitPending = true;
         StateHasChanged();
     }
 
@@ -802,7 +897,7 @@
     public async Task DownloadAsync(string fileName, ImageExportOptions? options = null)
     {
         var encoded = await ExportAsync(options);
-        if (encoded is not null) await Exporter.DownloadAsync(encoded, fileName);
+        if (encoded is not null) await RunAsync(() => Exporter.DownloadAsync(encoded, fileName).AsTask());
     }
 
     /// <summary>Copies the exported image to the clipboard as PNG, which is the only format browsers reliably accept.</summary>

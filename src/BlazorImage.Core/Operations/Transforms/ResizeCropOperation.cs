@@ -37,7 +37,9 @@ public sealed class ResizeCropOperation : ImageOperation, IGeometricOperation
         if (rect.IsEmptyArea()) return null;
         if (rect.Size == plan.CanvasSize) return null;   // nothing saved
         if (plan.IsIdentity(inputSize)) return null;     // a plain crop is already cheaper
-        return new ResizeCropOperation(resize, rect);
+        // Store the crop as written, not as clipped here: Resolve clips it against the real canvas at run time, which
+        // matters if the size used for planning turns out to be wrong.
+        return new ResizeCropOperation(resize, crop.Rectangle);
     }
 
     private (ResizePlan Plan, Rectangle Rect) Resolve(Size inputSize)

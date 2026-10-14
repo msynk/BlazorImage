@@ -14,17 +14,17 @@
     <label class="field-label" style="align-self:center; margin:0">Theme</label>
     @foreach (var theme in new[] { "auto", "light", "dark" })
     {
-        <button type="button" class="chip" aria-pressed="@(_theme == theme)" @onclick="() => _theme = theme">@theme</button>
+        <button type="button" class="chip" aria-pressed="@(_theme == theme ? "true" : "false")" @onclick="() => _theme = theme">@theme</button>
     }
     <label class="field-label" style="align-self:center; margin-inline-start:16px; margin-bottom:0">Direction</label>
     @foreach (var dir in new[] { "ltr", "rtl" })
     {
-        <button type="button" class="chip" aria-pressed="@(_direction == dir)" @onclick="() => _direction = dir">@dir</button>
+        <button type="button" class="chip" aria-pressed="@(_direction == dir ? "true" : "false")" @onclick="() => _direction = dir">@dir</button>
     }
     <label class="field-label" style="align-self:center; margin-inline-start:16px; margin-bottom:0">Language</label>
     @foreach (var lang in Languages)
     {
-        <button type="button" class="chip" aria-pressed="@(_language == lang.Key)" @onclick="() => SetLanguage(lang.Key)">@lang.Key</button>
+        <button type="button" class="chip" aria-pressed="@(_language == lang.Key ? "true" : "false")" @onclick="() => SetLanguage(lang.Key)">@lang.Key</button>
     }
 </div>
 
@@ -109,7 +109,7 @@
         <button @onclick="() => editor.DownloadAsync(&quot;edited&quot;)">Save</button>
 
         @* And the advanced path is the same component. *@
-        <ImageEditor Strings="german" Direction="rtl" Class="bi-theme-dark"
+        <ImageEditor Strings="german" Class="bi-theme-dark"
                      MaxProxyDimension="3000"
                      OnDocumentChanged="doc => Persist(doc)">
             <Toolbar Context="editor">
@@ -149,8 +149,8 @@
     {
         _language = language;
         _strings = Languages[language];
-        // Persian reads right to left, so switching the language switches the layout too.
-        if (language == "فارسی") _direction = "rtl";
+        // Persian reads right to left, so switching the language switches the layout too, and back again.
+        _direction = language == "فارسی" ? "rtl" : "ltr";
     }
 
     private void OnDocumentChanged(ImageDocument document)

@@ -25,12 +25,22 @@
         @if (_source is null)
         {
             <ImageDropZone Label="Drop a photo here, or click to choose one" OnFilesSelected="OnFilesSelected" />
+            <div class="sample-row">
+                <button class="btn" disabled="@_busy" @onclick="UseSample">Use a sample image</button>
+                <span class="small muted">No photo to hand? A generated scene with a person in it works too.</span>
+            </div>
         }
         else
         {
             <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start">
                 <div>
-                    <p class="card-title">Result</p>
+                    <p class="card-title">
+                        Result
+                        @if (_busy)
+                        {
+                            <span class="working" role="status" style="margin-inline-start:8px">Working…</span>
+                        }
+                    </p>
                     <div style="width:@(PreviewSize)px; height:@(PreviewSize)px; border-radius:@(_circular ? "50%" : "12px"); overflow:hidden; border:1px solid var(--border)">
                         <ImagePreview Image="_result" Version="_resultVersion" Alt="Avatar preview" Style="width:100%;height:100%;object-fit:cover;border:none;border-radius:0" />
                     </div>
@@ -42,7 +52,7 @@
                         @_source.Width × @_source.Height
                         @if (_sourceBytes > 0)
                         {
-                            <text> · @Format(_sourceBytes)</text>
+                            <text> · @Display.Bytes(_sourceBytes)</text>
                         }
                     </p>
                 </div>
@@ -73,10 +83,10 @@
         <div class="field">
             <span class="field-label">Framing</span>
             <div class="chip-row">
-                <button type="button" class="chip" aria-pressed="@_smart" @onclick="() => SetSmart(true)">Smart</button>
+                <button type="button" class="chip" aria-pressed="@(_smart ? "true" : "false")" @onclick="() => SetSmart(true)">Smart</button>
                 @foreach (var anchor in new[] { Anchor.Center, Anchor.Top, Anchor.Bottom })
                 {
-                    <button type="button" class="chip" aria-pressed="@(!_smart && _anchor == anchor)"
+                    <button type="button" class="chip" aria-pressed="@(!_smart && _anchor == anchor ? "true" : "false")"
                             @onclick="() => SetAnchor(anchor)">@anchor</button>
                 }
             </div>
@@ -112,15 +122,15 @@
                 </div>
                 <div class="stat">
                     <span class="stat-label">Size</span>
-                    <span class="stat-value @(_encoded.Length <= _budgetKb * 1024 ? "good" : "")">@Format(_encoded.Length)</span>
+                    <span class="stat-value @(_encoded.Length <= _budgetKb * 1024 ? "good" : "bad")">@Display.Bytes(_encoded.Length)</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Quality</span>
                     <span class="stat-value">@(_encoded.Quality is { } q ? $"{q:0.00}" : "—")</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Saved</span>
-                    <span class="stat-value good">@(_sourceBytes > 0 ? $"{100 - _encoded.Length * 100.0 / _sourceBytes:0}%" : "—")</span>
+                    <span class="stat-label">Vs. upload</span>
+                    <span class="stat-value @(Display.IsSmaller(_sourceBytes, _encoded.Length) ? "good" : null)">@Display.Change(_sourceBytes, _encoded.Length)</span>
                 </div>
             </div>
         }
@@ -159,13 +169,15 @@
     private string? _fallbackNotice;
     private ImageCapabilities? _capabilities;
     private readonly Debouncer _debounce = new(200);
+    // Identifies the newest run. An older run that finishes late, or after the source changed, is discarded.
+    private int _run;
 
     private int PreviewSize => Math.Min(_size, 220);
 
     protected override async Task OnInitializedAsync() => _capabilities = await Capabilities.GetAsync();
 
     private const string Snippet = """
-        // Square crop from the middle, high quality downscale, gentle sharpen,
+        // Square crop around the subject, high quality downscale, gentle sharpen,
         // then compress until it fits the budget. Circular masks are a pixel
         // operation, so they survive the resize rather than being a CSS trick.
         var pipeline = ImagePipeline.Create()
@@ -196,20 +208,34 @@
         _busy = true;
         try
         {
-            _source?.Dispose();
-            _sourceBytes = files[0].Size;
-            _source = await Loader.LoadAsync(files[0]);
-            _dominant = ImageStatistics.GetDominantColors(_source, 5, ignoreNearWhiteAndBlack: true);
-            await Regenerate();
+            var image = await Loader.LoadAsync(files[0]);
+            await SetSourceAsync(image, files[0].Size);
         }
         catch (Exception ex)
         {
             _error = Describe(ex);
-        }
-        finally
-        {
             _busy = false;
         }
+    }
+
+    private async Task UseSample()
+    {
+        _error = null;
+        _busy = true;
+        StateHasChanged();
+        // Let the busy state paint before the drawing work starts.
+        await Task.Yield();
+        await SetSourceAsync(SampleImages.Landscape(), 0);
+    }
+
+    private async Task SetSourceAsync(ImageBuffer image, long bytes)
+    {
+        _run++; // whatever is still running was reading the old source
+        _source?.Dispose();
+        _source = image;
+        _sourceBytes = bytes;
+        _dominant = ImageStatistics.GetDominantColors(_source, 5, ignoreNearWhiteAndBlack: true);
+        await Regenerate();
     }
 
     private void OnSizeChanged(ChangeEventArgs e)
@@ -248,11 +274,12 @@
 
     private async Task Regenerate()
     {
-        if (_source is null) return;
+        if (_source is not { } source) return;
+        var run = ++_run;
         _busy = true;
         _error = null;
-        _fallbackNotice = null;
         StateHasChanged();
+        ImageBuffer? next = null;
         try
         {
             // Smart framing picks where to crop; the fixed anchors are there to compare against.
@@ -260,18 +287,14 @@
                 ? ImagePipeline.Create().AutoOrient().SmartCrop(AspectRatio.Square).Resize(_size, _size, ResizeMode.Stretch).Sharpen(0.25f)
                 : ImagePipeline.Create().AutoOrient().Cover(_size, _size, _anchor).Sharpen(0.25f);
 
-            var next = await pipeline.ExecuteAsync(_source);
+            next = await pipeline.ExecuteAsync(source);
             if (_circular) ApplyCircularMask(next);
-
-            _result?.Dispose();
-            _result = next;
-            _resultVersion++;
 
             var preferred = new[] { ImageFormat.WebP, ImageFormat.Jpeg };
             // A circular avatar needs transparency, so a lossy opaque format would show the corners.
             if (_circular) preferred = [ImageFormat.WebP, ImageFormat.Png];
 
-            _encoded = await Exporter.EncodeWithFallbackAsync(next, preferred, new ImageExportOptions
+            var encoded = await Exporter.EncodeWithFallbackAsync(next, preferred, new ImageExportOptions
             {
                 Quality = 0.9,
                 MaxFileSize = _budgetKb * 1024L,
@@ -279,9 +302,20 @@
                 Metadata = MetadataPolicy.Remove,
                 Background = Rgba32.White,
             });
+            if (run != _run) return;
 
-            if (_capabilities is { } caps && !caps.CanEncode(ImageFormat.WebP))
-                _fallbackNotice = $"This browser cannot write WebP, so {_encoded.Format.ToString().ToUpperInvariant()} was used instead.";
+            _result?.Dispose();
+            _result = next;
+            next = null;
+            _resultVersion++;
+            _encoded = encoded;
+            _fallbackNotice = _capabilities is { } caps && !caps.CanEncode(ImageFormat.WebP)
+                ? $"This browser cannot write WebP, so {_encoded.Format.ToString().ToUpperInvariant()} was used instead."
+                : null;
+        }
+        catch (Exception) when (run != _run)
+        {
+            // Superseded: the newer run reports its own outcome.
         }
         catch (ImageEncodeException)
         {
@@ -293,8 +327,12 @@
         }
         finally
         {
-            _busy = false;
-            StateHasChanged();
+            next?.Dispose();
+            if (run == _run)
+            {
+                _busy = false;
+                StateHasChanged();
+            }
         }
     }
 
@@ -338,12 +376,16 @@
 
     private void Clear()
     {
+        _run++;
         _source?.Dispose();
         _result?.Dispose();
         _source = null;
         _result = null;
         _encoded = null;
         _sourceBytes = 0;
+        _dominant = [];
+        _fallbackNotice = null;
+        _busy = false;
         _error = null;
     }
 
@@ -351,13 +393,6 @@
     private static string FormatShare(double percent) => percent >= 1
         ? $"{percent:0}%"
         : percent >= 0.1 ? $"{percent:0.0}%" : "<0.1%";
-
-    private static string Format(long bytes) => bytes switch
-    {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
-        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
-    };
 
     private static string Describe(Exception ex) => ex switch
     {
@@ -369,6 +404,7 @@
 
     public void Dispose()
     {
+        _run++;
         _debounce.Dispose();
         _source?.Dispose();
         _result?.Dispose();

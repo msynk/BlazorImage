@@ -25,6 +25,8 @@ else if (Image is not null)
     private ImageBuffer? _rendered;
     private long _renderedVersion = -1;
     private string? _error;
+    // Parameters can change again while an encode is in flight; only the newest request may publish its URL.
+    private int _request;
 
     /// <summary>The image to show. Not owned by this component.</summary>
     [Parameter] public ImageBuffer? Image { get; set; }
@@ -42,10 +44,13 @@ else if (Image is not null)
     {
         if (Image is null || Image.IsDisposed)
         {
+            _request++;
+            _rendered = null;
             await ReleaseAsync();
             return;
         }
         if (ReferenceEquals(_rendered, Image) && _renderedVersion == Version) return;
+        var request = ++_request;
         _rendered = Image;
         _renderedVersion = Version;
         await ReleaseAsync();
@@ -53,12 +58,23 @@ else if (Image is not null)
         try
         {
             var encoded = await Exporter.EncodeAsync(Image, ImageExportOptions.Png);
-            _url = await Exporter.CreateObjectUrlAsync(encoded);
+            var url = await Exporter.CreateObjectUrlAsync(encoded);
+            if (request != _request)
+            {
+                // Superseded while encoding: this URL would show an outdated image and never be revoked.
+                await Exporter.ReleaseObjectUrlAsync(url);
+                return;
+            }
+            _url = url;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (request == _request)
         {
             _url = null;
             _error = ex.Message;
+        }
+        catch (Exception)
+        {
+            // A superseded request failing (its image was disposed, say) is not this component's error to show.
         }
     }
 
@@ -70,5 +86,9 @@ else if (Image is not null)
         await Exporter.ReleaseObjectUrlAsync(url);
     }
 
-    public async ValueTask DisposeAsync() => await ReleaseAsync();
+    public async ValueTask DisposeAsync()
+    {
+        _request++;
+        await ReleaseAsync();
+    }
 }

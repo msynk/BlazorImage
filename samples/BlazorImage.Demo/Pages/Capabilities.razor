@@ -27,6 +27,7 @@ else
                     <tr><th scope="row">Logical processors</th><td class="num">@(_capabilities.HardwareConcurrency?.ToString() ?? "unknown")</td></tr>
                     <tr><th scope="row">Device memory</th><td class="num">@(_capabilities.DeviceMemoryGb is { } gb ? $"{gb:0.#} GB" : "unknown")</td></tr>
                     <tr><th scope="row">Max canvas edge</th><td class="num">@_capabilities.MaxCanvasDimension px</td></tr>
+                    <tr><th scope="row">Max canvas area</th><td class="num">@($"{_capabilities.MaxCanvasArea / 1_000_000.0:0.#} MP")</td></tr>
                     <tr><th scope="row">Suggested working size</th><td class="num">@_capabilities.SuggestedMaxWorkingDimension px</td></tr>
                 </tbody>
             </table>

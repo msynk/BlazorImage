@@ -295,7 +295,8 @@ public sealed class FontFile
                     var start = BinaryPrimitives.ReadUInt32BigEndian(t[p..]);
                     var end = BinaryPrimitives.ReadUInt32BigEndian(t[(p + 4)..]);
                     var glyph = BinaryPrimitives.ReadUInt32BigEndian(t[(p + 8)..]);
-                    if (end < start || end - start > 0x10FFFF) continue;
+                    // Code points end at 0x10FFFF. Bounding end also stops the uint loop below wrapping at 0xFFFFFFFF forever.
+                    if (end < start || end > 0x10FFFF) continue;
                     for (var c = start; c <= end; c++)
                     {
                         var g = glyph + (c - start);
@@ -395,12 +396,19 @@ public sealed class FontFile
     public GlyphOutline? GetGlyphOutline(ushort glyphIndex)
     {
         if (_glyphCache.TryGetValue(glyphIndex, out var cached)) return cached;
-        var outline = LoadGlyph(glyphIndex, 0);
+        var budget = MaxCompositeComponents;
+        var outline = LoadGlyph(glyphIndex, 0, ref budget);
         _glyphCache[glyphIndex] = outline;
         return outline;
     }
 
-    private GlyphOutline? LoadGlyph(ushort glyphIndex, int depth)
+    /// <summary>
+    /// Total components one glyph may expand to across every nesting level. The depth limit alone still allows a
+    /// composite that references itself many times to cost exponential time.
+    /// </summary>
+    private const int MaxCompositeComponents = 512;
+
+    private GlyphOutline? LoadGlyph(ushort glyphIndex, int depth, ref int budget)
     {
         if (depth > 5 || glyphIndex >= _loca.Length - 1) return null;
         var start = _loca[glyphIndex];
@@ -410,7 +418,7 @@ public sealed class FontFile
         if (length < 10) return null;
         var g = Data.Slice(_glyfOffset + (int)start, length);
         var numberOfContours = BinaryPrimitives.ReadInt16BigEndian(g);
-        return numberOfContours >= 0 ? ParseSimpleGlyph(g, numberOfContours) : ParseCompositeGlyph(g, depth);
+        return numberOfContours >= 0 ? ParseSimpleGlyph(g, numberOfContours) : ParseCompositeGlyph(g, depth, ref budget);
     }
 
     private static GlyphOutline? ParseSimpleGlyph(ReadOnlySpan<byte> g, int numberOfContours)
@@ -495,7 +503,7 @@ public sealed class FontFile
         return contours.Count == 0 ? null : new GlyphOutline(contours);
     }
 
-    private GlyphOutline? ParseCompositeGlyph(ReadOnlySpan<byte> g, int depth)
+    private GlyphOutline? ParseCompositeGlyph(ReadOnlySpan<byte> g, int depth, ref int budget)
     {
         var p = 10;
         var contours = new List<GlyphContour>();
@@ -538,7 +546,8 @@ public sealed class FontFile
                 a = F2Dot14(g, p); b = F2Dot14(g, p + 2); c = F2Dot14(g, p + 4); d = F2Dot14(g, p + 6); p += 8;
             }
 
-            var component = LoadGlyph(glyphIndex, depth + 1);
+            if (--budget < 0) break;
+            var component = LoadGlyph(glyphIndex, depth + 1, ref budget);
             if (component is not null)
             {
                 var m = new Matrix3x2(a, b, c, d, dx, dy);
@@ -600,7 +609,9 @@ public sealed class GlyphOutline
             if (startIndex < 0)
             {
                 startPoint = (Map(pts[0]) + Map(pts[n - 1])) / 2;
-                startIndex = 0;
+                // The synthesised start sits between the last and first points, so the walk begins at the last one
+                // and its first step is to point 0.
+                startIndex = n - 1;
                 builder.MoveTo(startPoint);
                 EmitFrom(builder, pts, n, startIndex, Map, startPoint, allOffCurve: true);
             }

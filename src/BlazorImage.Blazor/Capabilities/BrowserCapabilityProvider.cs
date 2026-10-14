@@ -102,7 +102,8 @@ public sealed class BrowserCapabilityProvider : IImageCapabilityProvider
             HardwareConcurrency = report.HardwareConcurrency,
             DeviceMemoryGb = report.DeviceMemoryGb,
             MaxCanvasDimension = maxDimension,
-            MaxCanvasArea = (long)maxDimension * maxDimension,
+            // Square of the edge unless the probe found a tighter area cap (iOS Safari).
+            MaxCanvasArea = report.MaxCanvasArea > 0 ? Math.Min(report.MaxCanvasArea, (long)maxDimension * maxDimension) : (long)maxDimension * maxDimension,
         };
     }
 
@@ -125,5 +126,6 @@ public sealed class BrowserCapabilityProvider : IImageCapabilityProvider
         [JsonPropertyName("hardwareConcurrency")] public int? HardwareConcurrency { get; set; }
         [JsonPropertyName("deviceMemoryGb")] public double? DeviceMemoryGb { get; set; }
         [JsonPropertyName("maxCanvasDimension")] public int MaxCanvasDimension { get; set; }
+        [JsonPropertyName("maxCanvasArea")] public long MaxCanvasArea { get; set; }
     }
 }

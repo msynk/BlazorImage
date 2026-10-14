@@ -35,7 +35,7 @@ public sealed class BrowserTextRasterizer : IDisposable
         _cacheLimit = Math.Max(1, cacheLimit);
     }
 
-    private readonly record struct CacheKey(string Text, string Font, string Color, float MaxWidth, float LetterSpacing, string Align);
+    private readonly record struct CacheKey(string Text, string Font, string Color, float MaxWidth, float LetterSpacing, float LineHeight, string Align);
 
     private sealed class CachedText : IDisposable
     {
@@ -82,7 +82,7 @@ public sealed class BrowserTextRasterizer : IDisposable
         var font = BuildFontString(style);
         var color = (style.FillColor ?? Rgba32.Black).ToCss();
         var align = style.Alignment switch { TextAlignment.Center => "center", TextAlignment.Right => "right", _ => "left" };
-        var key = new CacheKey(text, font, color, style.MaxWidth ?? 0, style.LetterSpacing, align);
+        var key = new CacheKey(text, font, color, style.MaxWidth ?? 0, style.LetterSpacing, style.LineHeight, align);
         if (_cache.TryGetValue(key, out var cached)) return cached;
 
         TextRenderInfo info;

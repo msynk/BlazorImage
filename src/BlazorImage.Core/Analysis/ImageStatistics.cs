@@ -68,7 +68,9 @@ public sealed class Histogram
     public int GetPercentile(double fraction)
     {
         if (Total == 0) return 0;
-        var target = (long)(Total * Math.Clamp(fraction, 0, 1));
+        // At least one pixel: a target of zero is met by an empty first bucket, so the 0th percentile would always be
+        // level 0 instead of the darkest level actually present.
+        var target = Math.Max(1, (long)Math.Ceiling(Total * Math.Clamp(fraction, 0, 1)));
         long running = 0;
         for (var i = 0; i < 256; i++)
         {

@@ -96,6 +96,9 @@ internal sealed class HuffmanTable
             if (n == 0) { MaxCode[len] = -1; }
             else
             {
+                // More codes than this length can hold means the table is not a prefix code; trusting it would index
+                // past the lookup table.
+                if (code + n > 1 << len) throw new ImageDecodeException("Invalid JPEG Huffman table.");
                 for (var i = 0; i < n; i++)
                 {
                     if (len <= 9)
@@ -668,8 +671,9 @@ internal sealed class JpegDecoderCore
                     case ColorTransform.Ycck:
                         for (var x = 0; x < _width; x++)
                         {
+                            // YCCK stores the YCC of the complemented CMY channels, so the converted values are inverted back.
                             var rgb = YccToRgb(rows[0][x], rows[1][x], rows[2][x]);
-                            dst[x] = CmykToRgb(rgb.R, rgb.G, rgb.B, rows[3][x], _adobe);
+                            dst[x] = CmykToRgb(255 - rgb.R, 255 - rgb.G, 255 - rgb.B, rows[3][x], _adobe);
                         }
                         break;
                 }
@@ -747,7 +751,7 @@ internal sealed class JpegDecoderCore
     {
         cb -= 128; cr -= 128;
         var r = y + ((91881 * cr + 32768) >> 16);
-        var g = y - ((22554 * cb + 46802 * cr - 32768) >> 16);
+        var g = y + ((-22554 * cb - 46802 * cr + 32768) >> 16); // rounds like the R and B terms (libjpeg)
         var b = y + ((116130 * cb + 32768) >> 16);
         return new Rgba32(Rgba32.ClampToByte(r), Rgba32.ClampToByte(g), Rgba32.ClampToByte(b));
     }

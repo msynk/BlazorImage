@@ -46,20 +46,23 @@
                 </div>
                 <div class="stat">
                     <span class="stat-label">Before</span>
-                    <span class="stat-value">@Format(_results.Sum(r => r.OriginalBytes))</span>
+                    <span class="stat-value">@Display.Bytes(TotalBefore)</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">After</span>
-                    <span class="stat-value">@Format(_results.Sum(r => r.NewBytes))</span>
+                    <span class="stat-value">@Display.Bytes(TotalAfter)</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Saved</span>
-                    <span class="stat-value good">@SavedPercent%</span>
+                    <span class="stat-label">Change</span>
+                    <span class="stat-value @(Display.IsSmaller(TotalBefore, TotalAfter) ? "good" : "bad")">@Display.Change(TotalBefore, TotalAfter)</span>
                 </div>
             </div>
+        }
 
+        @if (_results.Count > 0 || _failures.Count > 0)
+        {
             <div class="btn-row" style="margin-top:14px">
-                <button class="btn btn-primary" disabled="@_running" @onclick="DownloadAll">Download all</button>
+                <button class="btn btn-primary" disabled="@(_running || _results.Count == 0)" @onclick="DownloadAll">Download all</button>
                 <button class="btn" disabled="@_running" @onclick="Clear">Clear</button>
             </div>
 
@@ -70,7 +73,7 @@
                         <th scope="col">Size</th>
                         <th scope="col" class="num">Before</th>
                         <th scope="col" class="num">After</th>
-                        <th scope="col" class="num">Saved</th>
+                        <th scope="col" class="num">Change</th>
                         <th scope="col"></th>
                     </tr>
                 </thead>
@@ -80,9 +83,9 @@
                         <tr>
                             <td>@result.Name</td>
                             <td class="mono">@result.Dimensions</td>
-                            <td class="num">@Format(result.OriginalBytes)</td>
-                            <td class="num">@Format(result.NewBytes)</td>
-                            <td class="num" style="color:var(--success)">@result.SavedPercent%</td>
+                            <td class="num">@Display.Bytes(result.OriginalBytes)</td>
+                            <td class="num">@Display.Bytes(result.NewBytes)</td>
+                            <td class="num" style="color:@(Display.IsSmaller(result.OriginalBytes, result.NewBytes) ? "var(--success)" : "var(--danger)")">@Display.Change(result.OriginalBytes, result.NewBytes)</td>
                             <td><button class="btn" style="height:26px; padding:0 10px" @onclick="() => Download(result)">Save</button></td>
                         </tr>
                     }
@@ -108,7 +111,7 @@
 
         <div class="field">
             <label class="field-label" for="format">Format</label>
-            <select id="format" class="bi-select" @onchange="OnFormatChanged">
+            <select id="format" class="bi-select" disabled="@(_capabilities is null)" @onchange="OnFormatChanged">
                 @foreach (var format in AvailableFormats)
                 {
                     <option value="@format" selected="@(_format == format)">@format.ToString().ToUpperInvariant()</option>
@@ -120,7 +123,7 @@
         {
             <div class="field">
                 <label class="field-label" for="quality">Quality <span class="field-value">@_quality.ToString("0.00")</span></label>
-                <input id="quality" type="range" min="0.3" max="1" step="0.01" value="@_quality" @oninput="OnQualityChanged" />
+                <input id="quality" type="range" min="0.3" max="1" step="0.01" value="@_quality.ToString(System.Globalization.CultureInfo.InvariantCulture)" @oninput="OnQualityChanged" />
             </div>
         }
 
@@ -152,10 +155,7 @@
 </div>
 
 @code {
-    private sealed record Result(string Name, string Dimensions, long OriginalBytes, long NewBytes, EncodedImage Encoded)
-    {
-        public int SavedPercent => OriginalBytes == 0 ? 0 : (int)Math.Round(100 - NewBytes * 100.0 / OriginalBytes);
-    }
+    private sealed record Result(string Name, string Dimensions, long OriginalBytes, long NewBytes, EncodedImage Encoded);
 
     private sealed record Failure(string Name, string Message);
 
@@ -175,24 +175,14 @@
     private CancellationTokenSource? _cts;
     private ImageCapabilities? _capabilities;
 
-    private int SavedPercent
-    {
-        get
-        {
-            var before = _results.Sum(r => r.OriginalBytes);
-            var after = _results.Sum(r => r.NewBytes);
-            return before == 0 ? 0 : (int)Math.Round(100 - after * 100.0 / before);
-        }
-    }
+    private long TotalBefore => _results.Sum(r => r.OriginalBytes);
+    private long TotalAfter => _results.Sum(r => r.NewBytes);
 
-    private IEnumerable<ImageFormat> AvailableFormats
-    {
-        get
-        {
-            var candidates = new[] { ImageFormat.WebP, ImageFormat.Avif, ImageFormat.Jpeg, ImageFormat.Png };
-            return _capabilities is null ? candidates.Skip(2) : candidates.Where(_capabilities.CanEncode);
-        }
-    }
+    // Until the probe has run, only the current choice is listed (and the list is disabled), so the select never shows
+    // one format while the page would use another.
+    private IEnumerable<ImageFormat> AvailableFormats => _capabilities is null
+        ? [_format]
+        : new[] { ImageFormat.WebP, ImageFormat.Avif, ImageFormat.Jpeg, ImageFormat.Png }.Where(_capabilities.CanEncode);
 
     private const string Snippet = """
         // One pipeline, reused for every file. Nothing runs until ProcessBatchAsync executes it.
@@ -329,7 +319,7 @@
 
     private async Task DownloadAll()
     {
-        foreach (var result in _results)
+        foreach (var result in _results.ToList())
         {
             await Download(result);
             // Browsers throttle rapid successive downloads; a short gap keeps them all.
@@ -343,13 +333,6 @@
         _failures.Clear();
         _error = null;
     }
-
-    private static string Format(long bytes) => bytes switch
-    {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
-        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
-    };
 
     private static string Describe(Exception ex) => ex switch
     {

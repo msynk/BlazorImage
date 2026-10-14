@@ -24,38 +24,50 @@
         @if (_source is null)
         {
             <ImageDropZone Label="Drop a product photo here" OnFilesSelected="OnFilesSelected" />
+            <div class="sample-row">
+                <button class="btn" disabled="@_busy" @onclick="UseSample">Use a sample image</button>
+            </div>
         }
         else
         {
+            @if (_busy)
+            {
+                <p class="working" role="status" style="margin-top:0">Producing @(_variants.Count + 1) of @_planned…</p>
+            }
+
             <div class="thumb-grid">
                 @foreach (var variant in _variants)
                 {
-                    <div class="thumb">
+                    <div class="thumb" @key="variant.Version">
                         <ImagePreview Image="variant.Image" Version="variant.Version" Alt="@variant.Name"
                                       Class="" Style="width:100%; height:130px; object-fit:contain; border:none; border-radius:0" />
                         <div class="thumb-meta">
                             <div class="thumb-name">@variant.Name</div>
-                            <div>@variant.Image.Width × @variant.Image.Height · @Format(variant.Bytes)</div>
+                            <div>@variant.Image.Width × @variant.Image.Height · @Display.Bytes(variant.Bytes)</div>
                             <button class="btn" style="height:26px; padding:0 10px; margin-top:6px" @onclick="() => Download(variant)">Save</button>
                         </div>
                     </div>
                 }
             </div>
 
-            @if (_variants.Count > 0)
-            {
-                <div class="btn-row" style="margin-top:14px">
-                    <button class="btn btn-primary" disabled="@_busy" @onclick="DownloadAll">Download all @_variants.Count</button>
-                    <button class="btn" @onclick="Clear">Start over</button>
-                </div>
-                <p class="small muted" style="margin-top:10px; margin-bottom:0">
-                    Total output @Format(_variants.Sum(v => v.Bytes)) from a @Format(_sourceBytes) upload.
-                    @if (_skipped.Count > 0)
-                    {
-                        <text> Skipped @string.Join(", ", _skipped.OrderByDescending(s => s)) because the source is only @_source.Width × @_source.Height and upscaling would invent detail.</text>
-                    }
-                </p>
-            }
+            <div class="btn-row" style="margin-top:14px">
+                <button class="btn btn-primary" disabled="@(_busy || _variants.Count == 0)" @onclick="DownloadAll">Download all @_variants.Count</button>
+                <button class="btn" @onclick="Clear">Start over</button>
+            </div>
+            <p class="small muted" style="margin-top:10px; margin-bottom:0">
+                @if (_variants.Count > 0)
+                {
+                    <text>Total output @Display.Bytes(_variants.Sum(v => v.Bytes))@(_sourceBytes > 0 ? $" from a {Display.Bytes(_sourceBytes)} upload" : null).</text>
+                }
+                else if (!_busy && _sizes.Count == 0)
+                {
+                    <text>Pick at least one size.</text>
+                }
+                @if (_skipped.Count > 0)
+                {
+                    <text> Skipped @string.Join(", ", _skipped.OrderByDescending(s => s)) because the source is only @_source.Width × @_source.Height and upscaling would invent detail.</text>
+                }
+            </p>
         }
     </div>
 
@@ -87,14 +99,14 @@
             <div class="chip-row">
                 @foreach (var size in AllSizes)
                 {
-                    <button type="button" class="chip" aria-pressed="@_sizes.Contains(size)" @onclick="() => ToggleSize(size)">@size</button>
+                    <button type="button" class="chip" aria-pressed="@(_sizes.Contains(size) ? "true" : "false")" @onclick="() => ToggleSize(size)">@size</button>
                 }
             </div>
         </div>
 
         <div class="field">
             <label class="field-label" for="pformat">Format</label>
-            <select id="pformat" class="bi-select" @onchange="OnFormatChanged">
+            <select id="pformat" class="bi-select" disabled="@(_capabilities is null)" @onchange="OnFormatChanged">
                 @foreach (var format in AvailableFormats)
                 {
                     <option value="@format" selected="@(_format == format)">@format.ToString().ToUpperInvariant()</option>
@@ -133,21 +145,20 @@
     private readonly List<int> _skipped = [];
     private long _sourceBytes;
     private bool _busy;
+    private int _planned;
     private string? _error;
     private long _version;
     private ImageCapabilities? _capabilities;
     private readonly Debouncer _debounce = new(250);
+    // Identifies the newest run. A change while a run is producing variants starts a new run and the old one stops.
+    private int _run;
 
     private static readonly int[] AllSizes = [2048, 1024, 512, 256, 128, 64];
 
-    private IEnumerable<ImageFormat> AvailableFormats
-    {
-        get
-        {
-            var candidates = new[] { ImageFormat.WebP, ImageFormat.Avif, ImageFormat.Jpeg, ImageFormat.Png };
-            return _capabilities is null ? candidates.Skip(2) : candidates.Where(_capabilities.CanEncode);
-        }
-    }
+    // Until the probe has run, only the current choice is listed (and the list is disabled).
+    private IEnumerable<ImageFormat> AvailableFormats => _capabilities is null
+        ? [_format]
+        : new[] { ImageFormat.WebP, ImageFormat.Avif, ImageFormat.Jpeg, ImageFormat.Png }.Where(_capabilities.CanEncode);
 
     private const string Snippet = """
         // Contain rather than Cover: a product must never be cropped, so it is
@@ -181,15 +192,32 @@
         _error = null;
         try
         {
-            _source?.Dispose();
-            _sourceBytes = files[0].Size;
-            _source = await Loader.LoadAsync(files[0]);
-            await Generate();
+            var image = await Loader.LoadAsync(files[0]);
+            await SetSourceAsync(image, files[0].Size);
         }
         catch (Exception ex)
         {
             _error = Describe(ex);
         }
+    }
+
+    private async Task UseSample()
+    {
+        _error = null;
+        _busy = true;
+        StateHasChanged();
+        await Task.Yield();
+        await SetSourceAsync(SampleImages.Landscape(), 0);
+    }
+
+    private async Task SetSourceAsync(ImageBuffer image, long bytes)
+    {
+        _run++; // a run still producing variants was reading the old source
+        ClearVariants();
+        _source?.Dispose();
+        _source = image;
+        _sourceBytes = bytes;
+        await Generate();
     }
 
     private void ToggleSize(int size)
@@ -238,35 +266,39 @@
 
     private async Task Generate()
     {
-        if (_source is null || _busy) return;
+        if (_source is not { } source) return;
+        var run = ++_run;
         _busy = true;
         _error = null;
+        ClearVariants();
+        _skipped.Clear();
+
+        var exportOptions = new ImageExportOptions
+        {
+            Format = _format,
+            Quality = 0.85,
+            Metadata = MetadataPolicy.Remove,
+            Background = _background,
+        };
+
+        // Upscaling a product photo invents detail that is not there, and costs the most time of any variant. A
+        // catalogue pipeline should stop at the source resolution and say so.
+        var longestEdge = Math.Max(source.Width, source.Height);
+        var sizes = new List<int>();
+        foreach (var size in _sizes.OrderByDescending(s => s))
+        {
+            var (width, height) = Dimensions(size);
+            if (Math.Max(width, height) > longestEdge) _skipped.Add(size);
+            else sizes.Add(size);
+        }
+        _planned = sizes.Count;
         StateHasChanged();
+
         try
         {
-            foreach (var variant in _variants) variant.Image.Dispose();
-            _variants.Clear();
-
-            var exportOptions = new ImageExportOptions
-            {
-                Format = _format,
-                Quality = 0.85,
-                Metadata = MetadataPolicy.Remove,
-                Background = _background,
-            };
-
-            _skipped.Clear();
-            var longestEdge = Math.Max(_source.Width, _source.Height);
-            foreach (var size in _sizes.OrderByDescending(s => s))
+            foreach (var size in sizes)
             {
                 var (width, height) = Dimensions(size);
-                // Upscaling a product photo invents detail that is not there, and costs the most time of any variant.
-                // A catalogue pipeline should stop at the source resolution and say so.
-                if (Math.Max(width, height) > longestEdge)
-                {
-                    _skipped.Add(size);
-                    continue;
-                }
                 var inset = _padding / 100.0;
                 var innerW = Math.Max(1, (int)(width * (1 - inset * 2)));
                 var innerH = Math.Max(1, (int)(height * (1 - inset * 2)));
@@ -278,12 +310,30 @@
                     .Resize(width, height, ResizeMode.Contain, background: _background)
                     .Sharpen(0.25f);
 
-                var image = await pipeline.ExecuteAsync(_source);
-                var encoded = await Exporter.EncodeAsync(image, exportOptions);
+                var image = await pipeline.ExecuteAsync(source);
+                EncodedImage encoded;
+                try
+                {
+                    encoded = await Exporter.EncodeAsync(image, exportOptions);
+                }
+                catch
+                {
+                    image.Dispose();
+                    throw;
+                }
+                if (run != _run)
+                {
+                    image.Dispose();
+                    return;
+                }
                 _variants.Add(new Variant($"{width}×{height}", size, image, encoded, ++_version));
                 StateHasChanged();
                 await Task.Yield();
             }
+        }
+        catch (Exception) when (run != _run)
+        {
+            // Superseded: the newer run reports its own outcome.
         }
         catch (Exception ex)
         {
@@ -291,8 +341,11 @@
         }
         finally
         {
-            _busy = false;
-            StateHasChanged();
+            if (run == _run)
+            {
+                _busy = false;
+                StateHasChanged();
+            }
         }
     }
 
@@ -310,28 +363,31 @@
 
     private async Task DownloadAll()
     {
-        foreach (var variant in _variants)
+        foreach (var variant in _variants.ToList())
         {
             await Download(variant);
+            // Browsers throttle rapid successive downloads; a short gap keeps them all.
             await Task.Delay(250);
         }
     }
 
-    private void Clear()
+    private void ClearVariants()
     {
         foreach (var variant in _variants) variant.Image.Dispose();
         _variants.Clear();
-        _source?.Dispose();
-        _source = null;
-        _error = null;
     }
 
-    private static string Format(long bytes) => bytes switch
+    private void Clear()
     {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
-        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
-    };
+        _run++;
+        ClearVariants();
+        _skipped.Clear();
+        _source?.Dispose();
+        _source = null;
+        _sourceBytes = 0;
+        _busy = false;
+        _error = null;
+    }
 
     private static string Describe(Exception ex) => ex switch
     {
@@ -343,8 +399,9 @@
 
     public void Dispose()
     {
+        _run++;
         _debounce.Dispose();
-        foreach (var variant in _variants) variant.Image.Dispose();
+        ClearVariants();
         _source?.Dispose();
     }
 }

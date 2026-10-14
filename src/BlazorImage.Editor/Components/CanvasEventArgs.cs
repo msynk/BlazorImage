@@ -35,6 +35,12 @@ public readonly record struct CanvasPointerArgs(
     CropHandle? Handle)
 {
     /// <summary>True when the input came from a stylus, which reports usable pressure.</summary>
+    /// <summary>
+    /// The pointer position in viewport (CSS) pixels. Unlike <see cref="Point"/> it does not move when the view pans or
+    /// zooms, which makes it the right measure for gestures that change the view.
+    /// </summary>
+    public Vector2 Screen { get; init; }
+
     public bool IsPen => PointerType == "pen";
 
     /// <summary>True when the input came from a finger.</summary>
