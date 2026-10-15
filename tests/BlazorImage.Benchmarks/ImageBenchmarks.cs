@@ -19,8 +19,8 @@ namespace BlazorImage.Benchmarks;
 
 /// <summary>
 /// Measures the operations that dominate real workloads. These run on desktop .NET rather than in a browser, so treat
-/// them as a relative guide to where time goes; the ordering holds on WebAssembly, the absolute numbers are several
-/// times larger there.
+/// them as a relative guide to where time goes. The ordering holds on WebAssembly; the absolute numbers are 1.2 to 2.4
+/// times larger there with AOT compilation and 10 to 35 times larger on the default interpreter.
 /// </summary>
 public static class Images
 {

@@ -68,6 +68,21 @@ Only needed for `BlazorImage.Editor`. Put it in `index.html` or `App.razor`:
 
 The browser bridge script is loaded on demand by the library. You do not add a script tag for it.
 
+## Enable AOT compilation
+
+For WebAssembly, add this to the project that runs in the browser:
+
+```xml
+<PropertyGroup>
+  <RunAOTCompilation>true</RunAOTCompilation>
+</PropertyGroup>
+```
+
+All image processing is C#, and on Blazor's default interpreter it runs 10 to 35× slower than compiled code. AOT needs
+the `wasm-tools` workload and only takes effect on `dotnet publish`, so a page that feels slow under `dotnet run` may be
+fine once published. [performance.md](performance.md#webassembly-compile-ahead-of-time) has the measurements and the
+trade-offs.
+
 ## Your first image
 
 ```razor

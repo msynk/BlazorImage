@@ -129,8 +129,10 @@ Every part of its UI can be replaced while keeping the engine:
 
 ## Measured, not claimed
 
-Every number below was measured with BenchmarkDotNet on desktop .NET 10. WebAssembly is slower in absolute terms, but the
-relative picture holds. See [docs/performance.md](docs/performance.md) for the full tables and how to reproduce them.
+Every number below was measured with BenchmarkDotNet on desktop .NET 10. In the browser, enable
+`<RunAOTCompilation>true</RunAOTCompilation>`: with it WebAssembly lands within 1.2 to 2.4× of these numbers, without it
+the default interpreter is 10 to 35× slower. See [docs/performance.md](docs/performance.md) for the full tables and how
+to reproduce them.
 
 | Operation | Image | Time | Allocated |
 | --- | --- | ---: | ---: |

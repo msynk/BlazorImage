@@ -6,6 +6,9 @@
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
     <RootNamespace>BlazorImage.Demo</RootNamespace>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Pixel loops run 10-35x slower on the WebAssembly interpreter than compiled. AOT applies on publish only, so
+         `dotnet run` still uses the interpreter; see docs/performance.md. Requires the wasm-tools workload. -->
+    <RunAOTCompilation>true</RunAOTCompilation>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.11" />

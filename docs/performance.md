@@ -7,8 +7,44 @@ dotnet run --project tests/BlazorImage.Benchmarks -c Release -- --filter "*"
 ```
 
 **Environment for the tables below:** .NET 10.0.11, x64 RyuJIT with AVX2, Windows 11, workstation GC. Short job:
-one launch, one warmup, three iterations. WebAssembly is several times slower in absolute terms; the relative ordering
-holds, which is what these tables are for.
+one launch, one warmup, three iterations. In the browser these numbers only hold with AOT compilation; see
+[WebAssembly: compile ahead of time](#webassembly-compile-ahead-of-time) before reading anything else here.
+
+## WebAssembly: compile ahead of time
+
+By default Blazor WebAssembly runs your .NET code, and this library, on an IL interpreter. Tight pixel loops are the
+worst case for an interpreter: every `Vector4` operation that RyuJIT turns into one SIMD instruction becomes a separate
+interpreted step. Measured on a 1920×1080 image in Chrome, best of three after a warmup, against desktop .NET on the
+same machine:
+
+| Operation | Interpreter | AOT | Desktop .NET |
+| --- | ---: | ---: | ---: |
+| Resize to 1280, Lanczos3 | 505 ms | **56 ms** | 34 ms |
+| Brightness | 406 ms | **27 ms** | 21 ms |
+| Four adjustments, fused | 1008 ms | **63 ms** | 48 ms |
+| Gaussian blur, radius 8 | 789 ms | **88 ms** | 57 ms |
+| Unsharp mask | 1267 ms | **119 ms** | 86 ms |
+| Rotate 37° (bicubic) | 8627 ms | **594 ms** | 246 ms |
+
+The interpreter is 10 to 35× slower than desktop .NET; AOT is 1.2 to 2.4×. A Debug build measured the same as a
+Release build on the interpreter, so the build configuration is not the issue. Enable AOT in the project that runs in
+the browser:
+
+```xml
+<PropertyGroup>
+  <RunAOTCompilation>true</RunAOTCompilation>
+</PropertyGroup>
+```
+
+It needs the `wasm-tools` workload (`dotnet workload install wasm-tools`) and three things are worth knowing:
+
+- **It only applies to `dotnet publish`.** `dotnet run` and the Visual Studio debugger always use the interpreter, so
+  judge performance on a published build, never in development.
+- **The download grows.** The runtime's `dotnet.native.wasm` went from 2.9 MB to 13 MB uncompressed in the measurement
+  above.
+- **Publishing takes minutes rather than seconds**, because every assembly is compiled to WebAssembly.
+
+The relative ordering in the tables below holds under both, so the guidance at the end applies either way.
 
 ## Resizing
 

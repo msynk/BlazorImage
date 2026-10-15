@@ -126,6 +126,10 @@ Memory pressure. In order of effect:
 
 Check the obvious first:
 
+- **Enable AOT compilation and measure a published build.** Without `<RunAOTCompilation>true</RunAOTCompilation>`,
+  Blazor WebAssembly interprets the pixel loops 10 to 35× slower than compiled code, and `dotnet run` never uses AOT
+  even when it is enabled. This outweighs everything else on this list. See
+  [performance.md](performance.md#webassembly-compile-ahead-of-time).
 - **Cap dimensions before anything else.** `MaxSize(1920, 1920)` early makes everything after it cheaper.
 - **Group adjustments together** so they fuse into one pass. A geometric operation in the middle prevents that.
 - **Use `Rotate(90)` rather than `Rotate(90.5)`.** Right angles take a lossless path that is about 100× faster.
