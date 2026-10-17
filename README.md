@@ -1,3 +1,5 @@
+**Note**: moved to bit BlazorUI (https://blazorui.bitplatform.dev)
+
 # BlazorImage
 
 Browser-side image processing for Blazor. Load, transform, annotate and export images entirely on the user's device,
