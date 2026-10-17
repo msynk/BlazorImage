@@ -1,4 +1,4 @@
-**Note**: moved to bit BlazorUI (https://blazorui.bitplatform.dev)
+**Note**: moved to bitplatform (https://bmage.bitplatform.dev)
 
 # BlazorImage
 
